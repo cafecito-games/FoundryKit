@@ -11,6 +11,14 @@ class_name NativeRequest extends RefCounted
 
 const DEFAULT_TIMEOUT_SECONDS: float = 120.0
 
+## Keeps every in-flight request alive independent of its caller's own reference.
+##
+## A caller typically discards its local variable once it holds the returned [Coroutine]
+## — the coroutine's suspended state keeps only a raw pointer to its owner, not a strong
+## reference. Without this registry the request would be freed while suspended, silently
+## dropping the signal connections below. Each instance removes itself once settled.
+static var _in_flight: Array[NativeRequest] = []
+
 signal _settled(outcome: NativeOutcome)
 
 var _log: FoundryKitLog
@@ -41,12 +49,7 @@ async func await_outcome(
 	_payload_fields = payload_fields.duplicate()
 	_started_ticks_ms = Time.get_ticks_msec()
 
-	# A caller typically discards its reference to this request once it holds the returned
-	# [Coroutine] — the coroutine's suspended state keeps only a raw pointer to its owner,
-	# not a strong reference. Without this, the request would be freed while suspended,
-	# silently dropping the signal connections below. `unreference()` mirrors this once
-	# the request settles.
-	reference()
+	_in_flight.append(self)
 
 	target.connect(success_signal, _on_native_success)
 	target.connect(failure_signal, _on_native_failed)
@@ -57,7 +60,7 @@ async func await_outcome(
 		timer.timeout.connect(_on_timeout)
 
 	var outcome: NativeOutcome = await _settled
-	unreference()
+	_in_flight.erase(self)
 	return outcome
 
 ## Settles the request as abandoned. Called by [RequestGuard] when the app regains focus
