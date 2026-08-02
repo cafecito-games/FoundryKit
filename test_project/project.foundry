@@ -8,6 +8,10 @@ config/name="FoundryKitTest"
 config/features=PackedStringArray("0.1")
 config/icon="res://icon.svg"
 
+[autoload]
+
+FoundryKit="*res://addons/FoundryKit/FoundryKit.fs"
+
 [debug]
 
 foundry_script/warnings/directory_rules={
