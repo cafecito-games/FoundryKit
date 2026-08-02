@@ -7,6 +7,14 @@ namespace games.cafecito.foundrykit.core
 ## await a result instead, so this is the one place that translation happens.
 ##
 ## An instance handles exactly one request and settles exactly once.
+##
+## This adapter does not correlate a native's signal emission to a specific request — the
+## native protocol carries no per-call token. If a request times out or is [method
+## abandon]ed while its underlying native operation is still running, and a *new* request
+## later connects to the same native target and signal names, a late emission from the
+## first operation can be mistaken for the second request's result. Preventing that
+## overlap (single-flight gating per native target) is a sibling concern, not this
+## class's job.
 class_name NativeRequest extends RefCounted
 
 const DEFAULT_TIMEOUT_SECONDS: float = 120.0
