@@ -20,3 +20,9 @@ tasks:
     cmds:
       - scripts/test-import-boundaries
       - scripts/test-foundry-script-strict
+      - scripts/test-uid-coverage
+
+  uids:
+    desc: Generate .uid files for addon scripts missing one
+    cmds:
+      - scripts/generate-uids

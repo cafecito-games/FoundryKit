@@ -22,6 +22,7 @@ Each GitHub issue links to the plan task holding its complete code and exact com
 ```bash
 task test:foundrylib   # Foundry Script suite (foundry.testlib), headless
 task test:scripts      # Build-script and boundary regression checks
+task uids              # Generate .uid files for scripts missing one
 task lint              # prek run --all-files
 task                   # default: test:foundrylib
 ```

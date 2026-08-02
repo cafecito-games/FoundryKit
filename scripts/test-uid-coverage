@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+addon="$repo_root/addons/FoundryKit"
+
+fail_files=()
+
+while IFS= read -r -d '' script; do
+    uid_file="${script}.uid"
+    [ -f "$uid_file" ] || fail_files+=("${script#"$repo_root"/}")
+done < <(find "$addon" -name '*.fs' -print0)
+
+if [ "${#fail_files[@]}" -gt 0 ]; then
+    echo "FAIL: the following scripts are missing a committed .uid file:" >&2
+    for f in "${fail_files[@]}"; do
+        echo "  $f" >&2
+    done
+    echo "Run 'task uids' from the repository root to generate them." >&2
+    exit 1
+fi
+
+echo "PASS: every addon script under addons/FoundryKit/ has a committed .uid file"
