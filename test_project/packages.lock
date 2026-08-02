@@ -1,0 +1,5 @@
+[packages]
+  [packages.foundrylib]
+    resolved_version = "6df2b4d7ff43c013a4c9e9033c01cdadbdeda19a"
+    source_path = "addons/foundrylib"
+    spec_hash = "773b218f80929ef788ddeb815f885ecb4c002be19f69942b7b3c33d315e4ccf0"

@@ -1,12 +1,12 @@
+.foundry/
+/android/
 .DS_Store
 .build/
 .worktrees/
-test_project/.godot/
 test_project/.foundry/
 test_project/addons/foundrylib/
 test_project/addons/FoundrySwift/
 test_project/addons/FoundryKit/
-test_project/packages.lock
 addons/FoundryKit/bin/**/*.xcframework
 addons/FoundryKit/bin/**/*.framework
 addons/FoundryKit/bin/**/*.aar
