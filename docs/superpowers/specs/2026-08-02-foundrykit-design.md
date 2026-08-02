@@ -46,27 +46,35 @@ Verified against `Foundry/modules/foundry_script/GRAMMAR.md`:
 - Nullable types (`T?`), structural tuples (`(T1, T2)`), `tuple_name`, `Coroutine[T]`
   and typed `Signal[[...]]` are all available.
 - `@autoload` supports `depends_on` and `order_id`.
-- **Bare-name cross-file `class_name` inheritance does not resolve; path-form does.**
-  `GRAMMAR.md` §3.3 documents two forms of `extends_decl`: a bare inheritance chain of
-  identifiers (`extends A.B.C`) and a path string, optionally followed by an inner-class
-  chain (`extends "res://base.fs"`). Only the bare-name form fails across files — a
-  `class_name` in one `.fs` file cannot `extends` a bare identifier naming a `class_name`
-  base declared in a different file, even when both files share a namespace and the
-  child carries an explicit self-import; the engine reports
-  `Could not find base class "<Base>"`. The path-form (`extends "res://path/to/base.fs"`)
-  resolves correctly across files and the child inherits the base's members — reproduced
-  with a temporary `ProbePathChild extends "res://tests/support/probe_path_base.notest.fs"`
+- **Bare-name cross-file `class_name` inheritance does not resolve for a namespaced
+  class; path-form always does.** `GRAMMAR.md` §3.3 documents two forms of
+  `extends_decl`: a bare identifier (optionally an inner-class chain, `extends A.B.C`)
+  and a path string, optionally followed by an inner-class chain
+  (`extends "res://base.fs"`). The engine resolves a bare-name base by looking it up in
+  `ScriptServer`'s global class list; a `namespace`-declared `class_name` registers there
+  under its qualified name, not its bare identifier, so `extends BareName` cannot find it
+  from another file even when both files share the same `namespace` and the child carries
+  an explicit self-import — the engine reports `Could not find base class "<Base>"`. An
+  unnamespaced `class_name` registers under its bare identifier and *does* resolve
+  cross-file this way (reproduced with a temporary unnamespaced probe pair; the engine's
+  own `trait_base.notest.fs` / `trait_suite.notest.fs` fixture under
+  `Foundry/modules/foundry_script/tests/scripts/project_scripts_discovery/` is the same
+  shape). Every FoundryKit type is namespaced, so this exception does not apply here. The
+  path-form (`extends "res://path/to/base.fs"`) resolves correctly across files
+  regardless of namespace, and the child inherits the base's members — reproduced with a
+  temporary `ProbePathChild extends "res://tests/support/probe_path_base.notest.fs"`
   probe under `test_project/tests/`, deleted after verification; the probe commands and
   raw output are recorded on the PR that introduced this correction (issue #21). The
   legacy AuthenticationKit `foundry-migration` branch relies on exactly this in
   production — its four platform backends (`AuthenticationKitBackendApple` and siblings)
   each `extends` one abstract base by `res://` path across files.
-  Path-form `extends` therefore *can* express a shared class-based contract across files.
-  This design still prescribes `trait_name` composed with `uses` for subsystem backend
-  contracts, but on design grounds rather than a language limitation: composition avoids
-  brittle `res://` path coupling between a backend and its base, keeps the contract free
-  of inherited state, and matches `BackendFactory[TBackend]` (Task 7), which already
-  ships as a generic trait. `trait_name` composed with `uses` across files is unaffected
+  Path-form `extends` therefore *can* express a shared class-based contract across files,
+  namespaced or not. This design still prescribes `trait_name` composed with `uses` for
+  subsystem backend contracts, but on design grounds rather than a language limitation:
+  composition avoids brittle `res://` path coupling between a backend and its base, keeps
+  the contract free of inherited state, and matches `BackendFactory[TBackend]` (Task 7),
+  which already ships as a generic trait. `trait_name` composed with `uses` across files
+  is unaffected
   by either form and is the form PR #17 shipped.
 
 ## Repository layout
