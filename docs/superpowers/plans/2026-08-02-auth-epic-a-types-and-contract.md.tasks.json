@@ -1,0 +1,124 @@
+{
+ "planPath": "docs/superpowers/plans/2026-08-02-auth-epic-a-types-and-contract.md",
+ "specPath": "docs/superpowers/specs/2026-08-02-foundrykit-design.md",
+ "epic": "A",
+ "epicCount": 7,
+ "plan": 2,
+ "tasks": [
+  {
+   "id": 0,
+   "subject": "Task 1: Provider and ProviderConfig",
+   "status": "pending",
+   "description": "**Goal:** Provider int enum with explicit values; ProviderConfig tagged union (Google carries web/ios/desktop client IDs). provider_of maps every case with no wildcard.\n\n**Files:**\n- addons/FoundryKit/auth/Provider.fs\n- addons/FoundryKit/auth/ProviderConfig.fs\n- test_project/tests/auth-provider.test.fs\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/Provider.fs\", \"addons/FoundryKit/auth/ProviderConfig.fs\", \"test_project/tests/auth-provider.test.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"Provider int enum with explicit values; ProviderConfig tagged union (Google carries web/ios/desktop client IDs). provider_of maps every case with no wildcard.\"]}\n```"
+  },
+  {
+   "id": 1,
+   "subject": "Task 2: AuthError",
+   "status": "pending",
+   "description": "**Goal:** Ten-case tagged union replacing the int enum, ten ERROR_* constants, the Failure class and three converters. from_native maps every NativeOutcome; Abandoned folds into Cancelled.\n\n**Files:**\n- addons/FoundryKit/auth/AuthError.fs\n- test_project/tests/auth-error.test.fs\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/AuthError.fs\", \"test_project/tests/auth-error.test.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"Ten-case tagged union replacing the int enum, ten ERROR_* constants, the Failure class and three converters. from_native maps every NativeOutcome; Abandoned folds into Cancelled.\"]}\n```",
+   "blockedBy": [
+    0
+   ]
+  },
+  {
+   "id": 2,
+   "subject": "Task 3: JWT helpers",
+   "status": "pending",
+   "description": "**Goal:** Jwt.subject_from and Jwt.expiry_from, ported from AuthenticationKitTypes. Malformed input yields absent, never an error.\n\n**Files:**\n- addons/FoundryKit/auth/internal/Jwt.fs\n- test_project/tests/auth-jwt.test.fs\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/internal/Jwt.fs\", \"test_project/tests/auth-jwt.test.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"Jwt.subject_from and Jwt.expiry_from, ported from AuthenticationKitTypes. Malformed input yields absent, never an error.\"]}\n```"
+  },
+  {
+   "id": 3,
+   "subject": "Task 4: Credential",
+   "status": "pending",
+   "description": "**Goal:** Native-to-backend seam as a tagged union: Google/Apple/EmailPassword. provider_of and subject_of, no wildcards. This is what epic B's Apple native returns.\n\n**Files:**\n- addons/FoundryKit/auth/Credential.fs\n- test_project/tests/auth-credential.test.fs\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/Credential.fs\", \"test_project/tests/auth-credential.test.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"Native-to-backend seam as a tagged union: Google/Apple/EmailPassword. provider_of and subject_of, no wildcards. This is what epic B's Apple native returns.\"]}\n```",
+   "blockedBy": [
+    0,
+    2
+   ]
+  },
+  {
+   "id": 4,
+   "subject": "Task 5: AuthSession",
+   "status": "pending",
+   "description": "**Goal:** Backend-owned session with round-trip serialisation, deep-copy duplicate, and expiry read from the access token's exp claim. Drops the denormalised provider_name.\n\n**Files:**\n- addons/FoundryKit/auth/AuthSession.fs\n- test_project/tests/auth-session.test.fs\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/AuthSession.fs\", \"test_project/tests/auth-session.test.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"Backend-owned session with round-trip serialisation, deep-copy duplicate, and expiry read from the access token's exp claim. Drops the denormalised provider_name.\"]}\n```",
+   "blockedBy": [
+    0,
+    2
+   ]
+  },
+  {
+   "id": 5,
+   "subject": "Task 6: AuthResponse and HttpMethod",
+   "status": "pending",
+   "description": "**Goal:** Authorized response with transport_ok/status/body/session_expired plus is_ok and json. HttpMethod is FoundryKit's own enum so no engine type leaks into the public API.\n\n**Files:**\n- addons/FoundryKit/auth/AuthResponse.fs\n- addons/FoundryKit/auth/HttpMethod.fs\n- test_project/tests/auth-response.test.fs\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/AuthResponse.fs\", \"addons/FoundryKit/auth/HttpMethod.fs\", \"test_project/tests/auth-response.test.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"Authorized response with transport_ok/status/body/session_expired plus is_ok and json. HttpMethod is FoundryKit's own enum so no engine type leaks into the public API.\"]}\n```"
+  },
+  {
+   "id": 6,
+   "subject": "Task 7: Result unions",
+   "status": "pending",
+   "description": "**Goal:** Five two-case unions named by payload shape: CredentialResult, SessionResult, TokenResult, ResponseResult, CompletionResult. One global type per file.\n\n**Files:**\n- addons/FoundryKit/auth/CredentialResult.fs\n- addons/FoundryKit/auth/SessionResult.fs\n- addons/FoundryKit/auth/TokenResult.fs\n- addons/FoundryKit/auth/ResponseResult.fs\n- addons/FoundryKit/auth/CompletionResult.fs\n- test_project/tests/auth-results.test.fs\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/CredentialResult.fs\", \"addons/FoundryKit/auth/SessionResult.fs\", \"addons/FoundryKit/auth/TokenResult.fs\", \"addons/FoundryKit/auth/ResponseResult.fs\", \"addons/FoundryKit/auth/CompletionResult.fs\", \"test_project/tests/auth-results.test.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"Five two-case unions named by payload shape: CredentialResult, SessionResult, TokenResult, ResponseResult, CompletionResult. One global type per file.\"]}\n```",
+   "blockedBy": [
+    1,
+    3,
+    4,
+    5
+   ]
+  },
+  {
+   "id": 7,
+   "subject": "Task 8: AuthBackend trait",
+   "status": "pending",
+   "description": "**Goal:** Platform backend contract as trait_name, never abstract class_name. Async operations return result unions; no signal pairs. Covers config, availability, sign-in, sign-out, secure storage.\n\n**Files:**\n- addons/FoundryKit/auth/internal/AuthBackend.fs\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/internal/AuthBackend.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"Platform backend contract as trait_name, never abstract class_name. Async operations return result unions; no signal pairs. Covers config, availability, sign-in, sign-out, secure storage.\"]}\n```",
+   "blockedBy": [
+    6
+   ]
+  },
+  {
+   "id": 8,
+   "subject": "Task 9: NullAuthBackend",
+   "status": "pending",
+   "description": "**Goal:** Backend for unsupported platforms and partial installs. Every async op resolves rather than hangs; sign_out and clear succeed, storage fails, sign-in reports Unavailable.\n\n**Files:**\n- addons/FoundryKit/auth/internal/NullAuthBackend.fs\n- test_project/tests/auth-null-backend.test.fs\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/internal/NullAuthBackend.fs\", \"test_project/tests/auth-null-backend.test.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"Backend for unsupported platforms and partial installs. Every async op resolves rather than hangs; sign_out and clear succeed, storage fails, sign-in reports Unavailable.\"]}\n```",
+   "blockedBy": [
+    7
+   ]
+  },
+  {
+   "id": 9,
+   "subject": "Task 10: AuthBackendFactory",
+   "status": "pending",
+   "description": "**Goal:** Uses core BackendFactory[AuthBackend]. for_platform returns null everywhere until epic B, so resolve yields the Null backend for every platform.\n\n**Files:**\n- addons/FoundryKit/auth/internal/AuthBackendFactory.fs\n- test_project/tests/auth-backend-factory.test.fs\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/internal/AuthBackendFactory.fs\", \"test_project/tests/auth-backend-factory.test.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"Uses core BackendFactory[AuthBackend]. for_platform returns null everywhere until epic B, so resolve yields the Null backend for every platform.\"]}\n```",
+   "blockedBy": [
+    8
+   ]
+  },
+  {
+   "id": 10,
+   "subject": "Task 11: AuthApi trait",
+   "status": "pending",
+   "description": "**Goal:** Public contract. Two signals only (session_expired, tokens_refreshed) for genuinely unsolicited events; every request/response op is async returning a result union.\n\n**Files:**\n- addons/FoundryKit/auth/AuthApi.fs\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/AuthApi.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"Public contract. Two signals only (session_expired, tokens_refreshed) for genuinely unsolicited events; every request/response op is async returning a result union.\"]}\n```",
+   "blockedBy": [
+    6
+   ]
+  },
+  {
+   "id": 11,
+   "subject": "Task 12: AuthSubsystem",
+   "status": "pending",
+   "description": "**Goal:** Concrete FoundryKit.auth. Resolves backend once, maps credential failures straight through, reports Configuration for session-layer ops epic C builds. Owns a RequestGuard.\n\n**Files:**\n- addons/FoundryKit/auth/AuthSubsystem.fs\n- test_project/tests/auth-subsystem.test.fs\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/AuthSubsystem.fs\", \"test_project/tests/auth-subsystem.test.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"Concrete FoundryKit.auth. Resolves backend once, maps credential failures straight through, reports Configuration for session-layer ops epic C builds. Owns a RequestGuard.\"]}\n```",
+   "blockedBy": [
+    9,
+    10
+   ]
+  },
+  {
+   "id": 12,
+   "subject": "Task 13: Facade wiring and strict checks",
+   "status": "pending",
+   "description": "**Goal:** Lazy FoundryKit.auth accessor registering the subsystem's guard; strict script asserts every auth file, namespace, and that AuthBackend/AuthApi are traits. Prove the assertions fail when a file is absent.\n\n**Files:**\n- addons/FoundryKit/FoundryKit.fs\n- scripts/test-foundry-script-strict\n- test_project/tests/auth-facade.test.fs\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/FoundryKit.fs\", \"scripts/test-foundry-script-strict\", \"test_project/tests/auth-facade.test.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"Lazy FoundryKit.auth accessor registering the subsystem's guard; strict script asserts every auth file, namespace, and that AuthBackend/AuthApi are traits. Prove the assertions fail when a file is absent.\"]}\n```",
+   "blockedBy": [
+    11
+   ]
+  }
+ ],
+ "lastUpdated": "2026-08-02"
+}
