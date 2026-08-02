@@ -67,3 +67,14 @@ func test_end_clears_backgrounded_state() -> void:
 	_guard.notify_focus_lost()
 	_guard.end()
 	Expect.that(_guard.was_backgrounded()).to_be_false()
+
+func test_stale_grace_timer_does_not_abandon_a_later_request() -> void:
+	_guard.recovery_due.connect(_on_recovery_due)
+	_guard.begin()
+	_guard.notify_focus_lost()
+	_guard.notify_focus_gained()
+	_guard.end()
+	_guard.begin()
+	await Async.seconds(0.05)
+	Expect.that(_recovery_due_count).to_equal(0)
+	Expect.that(_guard.is_active()).to_be_true()

@@ -18,6 +18,7 @@ var _log: FoundryKitLog
 var _is_active: bool = false
 var _was_backgrounded: bool = false
 var _grace_seconds: float = _DEFAULT_GRACE_SECONDS
+var _request_generation: int = 0
 
 func _init(log: FoundryKitLog) -> void:
 	_log = log
@@ -29,12 +30,14 @@ func begin() -> bool:
 		return false
 	_is_active = true
 	_was_backgrounded = false
+	_request_generation += 1
 	return true
 
 ## Releases the gate.
 func end() -> void:
 	_is_active = false
 	_was_backgrounded = false
+	_request_generation += 1
 
 func is_active() -> bool:
 	return _is_active
@@ -60,14 +63,18 @@ func notify_focus_gained() -> void:
 	if not _is_active or not _was_backgrounded:
 		return
 	_log.debug("request returned to foreground; scheduling recovery")
+	var scheduled_generation: int = _request_generation
 	var tree: SceneTree = Engine.get_main_loop() as SceneTree
 	if tree == null:
 		recovery_due.emit()
 		return
 	var timer: SceneTreeTimer = tree.create_timer(_grace_seconds)
-	timer.timeout.connect(_on_grace_elapsed)
+	timer.timeout.connect(_on_grace_elapsed.bind(scheduled_generation))
 
-func _on_grace_elapsed() -> void:
-	if not _is_active:
+## Fires [signal recovery_due] only when the request that scheduled this callback is
+## still the active one, so a stale timer from an already-finished request cannot
+## abandon a different request that has since begun.
+func _on_grace_elapsed(scheduled_generation: int) -> void:
+	if not _is_active or scheduled_generation != _request_generation:
 		return
 	recovery_due.emit()
