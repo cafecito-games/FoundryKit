@@ -40,11 +40,32 @@ falls back to `/Users/christian/CafecitoGames/Foundry/bin/foundry.macos.editor.d
 Private dependencies (FoundryLib) need `GITHUB_TOKEN`, `GH_TOKEN`, or an authenticated
 `gh`; the script resolves them in that order.
 
-### Availability during the foundation work
+### Editor project and resource identity
 
-`Taskfile.yml`, `scripts/test-foundrylib` and `.pre-commit-config.yaml` are created by
-issue #2. `task test:scripts` depends on scripts created by issue #11 and will fail until
-that lands — use `task test:foundrylib` as the gate before then.
+The repository root is itself a Foundry project. `project.foundry` at the root exists so
+the addon can be opened in the editor directly, with `addons/FoundryKit/` resolving as it
+will in a consumer project. `test_project/` remains a separate project used only by the
+headless suite.
+
+**Every addon script has a committed `.uid` file.** A `.uid` is the editor's stable
+identity for a script; without it the editor reassigns identities and references between
+resources break. They are never gitignored — only the generated `.foundry/` caches are.
+
+`.uid` files are **not** produced by the test runner. Creating a `.fs` file and running
+only `task test:foundrylib` yields a green build and an incomplete commit. Generate them
+explicitly:
+
+```bash
+foundry --headless project import --project .
+```
+
+Run from the repository root. It writes a `.uid` beside every script missing one, then
+exits. Object-leak warnings at teardown are normal headless noise, not failures.
+
+Note the CLI takes `--project <dir>`; the old `--path` flag was removed.
+
+Scripts under `test_project/tests/` do **not** get `.uid` files — they are test fixtures,
+never shipped, and none are tracked.
 
 ## Prerequisites
 
@@ -107,7 +128,9 @@ Breaking one is a defect, not a style preference.
   it into its own typed result union. Classes, traits and functions *are* generic — shared
   behaviour travels through generic traits.
 - Every case in a non-tagged-union enum needs an explicit `= expression`. Tagged unions
-  reject `=` on every case.
+  reject `=` on every case. The brace-and-comma form (`enum_name X { A, B, }`) used by
+  the legacy AuthenticationKit and PurchaseKit branches no longer parses — porting an
+  enum means rewriting it as an indented body with a value on every case.
 - Prefer full words in identifiers. `definition`, not `def`; `position`, not `pos`.
 
 ### Verified engine behaviour
@@ -133,8 +156,8 @@ parameters; nullable types (`T?`).
 | `Could not find type "X" in the current scope` | More than one global (head) `class_name` / `enum_name` / `trait_name` declared in one `.fs` file — the headless global-class scan registers only the first head type per file | Split into one head type per `.fs` file. Nested declarations inside a single head type are unaffected |
 | `unsafe_method_access` on a chained call, reporting the unspecialised type-parameter name instead of the composed concrete type | Calling a method directly on the return value of a generic trait's own **concrete** method (one not overridden by the composing class) | Bind the call to an explicitly typed local first, then call the method on that local |
 | `ClassDB.can_instantiate(name)` returns `true` for a class meant to stand in for "registered but abstract" | `FOUNDRY_REGISTER_VIRTUAL_CLASS` (e.g. `Texture`) still sets `creation_func`, so the class remains instantiable | Use a genuinely abstract class such as `InputEvent`, registered with `FOUNDRY_REGISTER_ABSTRACT_CLASS`, not a virtual one like `Texture` |
-| `Could not find base class "<Base>"` on a bare-name `extends` naming a `class_name` in another file | `extends SomeClass` (the bare identifier form of `extends_decl`, GRAMMAR.md §3.3) resolves a global class by looking it up in `ScriptServer`'s global class list; a `namespace`-declared `class_name` registers there under its qualified name, not the bare identifier, so it never resolves this way. (An unnamespaced `class_name` registers under its bare identifier and does resolve cross-file — irrelevant here since every FoundryKit type is namespaced.) | Use the path form instead: `extends "res://path/to/base.fs"`, which resolves across files regardless of namespace (see `AuthenticationKitBackendApple` and siblings on the `foundry-migration` branch); FoundryKit still prescribes `trait_name` + `uses` for subsystem backend contracts, on composition-over-inheritance grounds, not because the path form is broken |
-| `Could not find base class "games"` (or whatever the first path segment is) on `extends A.B.C` naming a fully qualified namespace path | The **dotted-name** form of `extends_decl` (GRAMMAR.md §3.3) resolves inner-class and same-file identifier chains only — it does not perform namespace-qualified cross-file lookup. The error names only the first path segment because the analyser treats the whole dotted chain as an identifier chain, not a namespace path | There is no dotted-namespace-path `extends`. As with the bare-name row above, a namespace-declared `class_name` in another file must use the path form (`extends "res://path/to/base.fs"`), regardless of whether the two types share a namespace |
+| `Could not find base class "<Base>"` on a bare-name `extends` naming a `class_name` in another file | `extends SomeClass` (the bare identifier form of `extends_decl`, GRAMMAR.md §3.3) resolves a global class by looking it up in `ScriptServer`'s global class list; a `namespace`-declared `class_name` registers there under its qualified name, not the bare identifier, so it never resolves this way. (An unnamespaced `class_name` registers under its bare identifier and does resolve cross-file — irrelevant here since every FoundryKit type is namespaced.) | **In FoundryKit: do not inherit across files at all.** Shared contracts are `trait_name` composed with `uses`; no FoundryKit type `extends` anything but an engine class. The path form (`extends "res://path/to/base.fs"`) does resolve regardless of namespace and is what the legacy `foundry-migration` branch uses, but it is not our idiom and should not be introduced |
+| `Could not find base class "games"` (or whatever the first path segment is) on `extends A.B.C` naming a fully qualified namespace path | The **dotted-name** form of `extends_decl` (GRAMMAR.md §3.3) resolves inner-class and same-file identifier chains only — it does not perform namespace-qualified cross-file lookup. The error names only the first path segment because the analyser treats the whole dotted chain as an identifier chain, not a namespace path | There is no dotted-namespace-path `extends`. In FoundryKit this never arises: contracts are traits composed with `uses`, so there is nothing to inherit across files |
 | `The method "new()" is not present on the inferred type "<Autoload>"` | Once a class carries `@autoload`, every bare reference to that class name **in an expression position** — including inside its own declaring file and that file's tests — resolves to the singleton **instance** type rather than the class type (`fs_analyzer.cpp`'s `resolve_identifier_from_scope` checks `get_autoload_singleton_value_type` before `get_global_class_in_namespace`). The `@autoload` annotation alone is sufficient to trigger it; it does not require a matching `[autoload]` entry in `project.foundry`. Type-annotation position is unaffected — `var _kit: FoundryKit` still resolves to the class | Preload the script and construct from the constant instead of the bare name: `const FoundryKitScript = preload("res://addons/FoundryKit/FoundryKit.fs")`, then `FoundryKitScript.new()` |
 
 The test project sets `untyped_declaration`, `unsafe_cast`, `unsafe_call_argument`,
