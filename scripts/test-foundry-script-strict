@@ -70,10 +70,18 @@ while IFS= read -r -d '' path; do
                 }
             }
             # Functions whose declared return type is NativeOutcome, so an inferred
-            # `:=` assignment from a call to one of them is recognised too.
+            # `:=` assignment from a call to one of them is recognised too. The return
+            # type may sit several lines below `func` when the parameter list wraps, so
+            # the signature is joined until it terminates in `:` before being checked.
             for (i = 1; i <= NR; i++) {
                 if (match(lines[i], /func[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*\(/)) {
-                    if (lines[i] ~ /->[ \t]*NativeOutcome([^A-Za-z0-9_]|$)/) {
+                    sig = lines[i]
+                    k = i
+                    while (sig !~ /:[ \t]*$/ && k < NR && k < i + 15) {
+                        k++
+                        sig = sig " " lines[k]
+                    }
+                    if (sig ~ /->[ \t]*NativeOutcome([^A-Za-z0-9_]|$)/) {
                         fname = lines[i]
                         sub(/^.*func[ \t]+/, "", fname)
                         sub(/[ \t]*\(.*$/, "", fname)
@@ -109,12 +117,17 @@ while IFS= read -r -d '' path; do
                     sub(/^[ \t]*match[ \t]+/, "", subject)
                     sub(/[ \t]*:[ \t]*$/, "", subject)
                     if (subject in outcome_vars) {
+                        # Only lines at the case-label indent count as direct branches of
+                        # this match; deeper-indented lines belong to a branch body,
+                        # including any nested match, and must not be inspected here.
+                        branch_indent = -1
                         for (j = i + 1; j <= NR; j++) {
                             branch = lines[j]
                             if (branch ~ /^[ \t]*$/) { continue }
                             cur = indent_of(branch)
                             if (cur <= base) { break }
-                            if (branch ~ /^[ \t]*_[ \t]*:[ \t]*$/) {
+                            if (branch_indent == -1) { branch_indent = cur }
+                            if (cur == branch_indent && branch ~ /^[ \t]*_[ \t]*:[ \t]*$/) {
                                 print FILENAME ":" j
                             }
                         }
