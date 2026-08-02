@@ -1,0 +1,22 @@
+; Engine configuration file.
+
+config_version=5
+
+[application]
+
+config/name="FoundryKitTest"
+config/features=PackedStringArray("0.1")
+config/icon="res://icon.svg"
+
+[debug]
+
+foundry_script/warnings/directory_rules={
+"res://addons/foundrylib": 0,
+"res://addons": 1
+}
+foundry_script/warnings/inferred_declaration=1
+foundry_script/warnings/unsafe_call_argument=2
+foundry_script/warnings/unsafe_cast=2
+foundry_script/warnings/unsafe_method_access=2
+foundry_script/warnings/unsafe_property_access=2
+foundry_script/warnings/untyped_declaration=2
