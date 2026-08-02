@@ -38,10 +38,60 @@ do
 done
 
 # Error unions must be matched exhaustively; a wildcard branch defeats the checking that
-# makes the union redesign safe.
-while IFS= read -r path; do
-    [ -n "$path" ] || continue
-    fail "core file uses a wildcard match branch over an outcome union: $path"
-done < <(rg -l '^\s+NativeOutcome\._:' "$addon" || true)
+# makes the union redesign safe. A wildcard branch is written as a bare `_:` case, so this
+# has to find matches whose subject is NativeOutcome-typed and then look for a `_:` case
+# among that match's own branches, not just grep for a literal string.
+while IFS= read -r -d '' path; do
+    hit=$(awk '
+        function indent_of(s,    i, c) {
+            i = 0
+            while (i < length(s)) {
+                c = substr(s, i + 1, 1)
+                if (c == " " || c == "\t") {
+                    i++
+                } else {
+                    break
+                }
+            }
+            return i
+        }
+        { lines[NR] = $0 }
+        END {
+            for (i = 1; i <= NR; i++) {
+                tmp = lines[i]
+                while (match(tmp, /[A-Za-z_][A-Za-z0-9_]*[ \t]*:[ \t]*NativeOutcome([^A-Za-z0-9_]|$)/)) {
+                    segment = substr(tmp, RSTART, RLENGTH)
+                    name = segment
+                    sub(/[ \t]*:.*/, "", name)
+                    gsub(/^[ \t(,]+/, "", name)
+                    outcome_vars[name] = 1
+                    tmp = substr(tmp, RSTART + RLENGTH)
+                }
+            }
+            for (i = 1; i <= NR; i++) {
+                line = lines[i]
+                if (match(line, /^[ \t]*match[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*:[ \t]*$/)) {
+                    base = indent_of(line)
+                    subject = line
+                    sub(/^[ \t]*match[ \t]+/, "", subject)
+                    sub(/[ \t]*:[ \t]*$/, "", subject)
+                    if (subject in outcome_vars) {
+                        for (j = i + 1; j <= NR; j++) {
+                            branch = lines[j]
+                            if (branch ~ /^[ \t]*$/) { continue }
+                            cur = indent_of(branch)
+                            if (cur <= base) { break }
+                            if (branch ~ /^[ \t]*_[ \t]*:[ \t]*$/) {
+                                print FILENAME ":" j
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    ' "$path")
+    [ -n "$hit" ] || continue
+    fail "core file uses a wildcard match branch over an outcome union: $hit"
+done < <(find "$addon" -name '*.fs' -print0)
 
 echo "PASS: Foundry Script structure checks hold"

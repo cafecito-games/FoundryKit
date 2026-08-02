@@ -20,7 +20,7 @@ if [ -d "$addon/core" ]; then
         while IFS= read -r hit; do
             [ -n "$hit" ] || continue
             fail "core/ imports subsystem namespace '$subsystem': $hit"
-        done < <(rg -l "^import games\.cafecito\.foundrykit\.${subsystem}\b" "$addon/core" || true)
+        done < <(rg -l "^import[[:space:]]+games\.cafecito\.foundrykit\.${subsystem}\b" "$addon/core" || true)
     done
 fi
 
@@ -32,7 +32,7 @@ for subsystem in "${subsystems[@]}"; do
         while IFS= read -r hit; do
             [ -n "$hit" ] || continue
             fail "subsystem '$subsystem' imports subsystem '$other': $hit"
-        done < <(rg -l "^import games\.cafecito\.foundrykit\.${other}\b" "$addon/$subsystem" || true)
+        done < <(rg -l "^import[[:space:]]+games\.cafecito\.foundrykit\.${other}\b" "$addon/$subsystem" || true)
     done
 done
 
@@ -43,7 +43,7 @@ while IFS= read -r hit; do
         */internal/*) ;;
         *) fail "non-internal file imports an internal namespace: $hit" ;;
     esac
-done < <(rg -l "^import games\.cafecito\.foundrykit\.[a-z]+\.internal\b" "$addon" || true)
+done < <(rg -l "^import[[:space:]]+games\.cafecito\.foundrykit\.[a-z]+\.internal\b" "$addon" || true)
 
 if [ "$status" -eq 0 ]; then
     echo "PASS: import boundaries hold"
