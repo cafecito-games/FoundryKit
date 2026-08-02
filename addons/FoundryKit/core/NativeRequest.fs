@@ -37,6 +37,18 @@ func _init(log: FoundryKitLog) -> void:
 ## [param payload_fields] names the success signal's arguments in order; they are zipped
 ## into the [code]Succeeded[/code] payload. Extra field names beyond the emitted argument
 ## count are omitted rather than filled with nulls.
+##
+## Await the returned [Coroutine] promptly — do not hold it across a frame boundary
+## before awaiting it. This engine's [code]await[/code] does not check whether a
+## coroutine has already completed before connecting to its one-shot completion signal,
+## so a coroutine that finishes before anyone awaits it hangs that later await forever.
+## [method _resolve] defers its settling signal by one message-queue turn specifically to
+## keep this method's own synchronous callers safe (see its doc comment); a caller that
+## itself defers awaiting past that point is outside the safe window this method provides.
+##
+## The watchdog requires a running [SceneTree] ([method Engine.get_main_loop]). Without
+## one, no timer is installed and this only resolves via the native's own signals or
+## [method abandon] — there is no fallback timeout mechanism.
 async func await_outcome(
 		target: Object,
 		success_signal: String,
