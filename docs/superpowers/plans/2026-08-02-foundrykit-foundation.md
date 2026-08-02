@@ -1461,7 +1461,11 @@ git commit -m "feat(core): add request guard with foreground recovery"
 - [ ] **Step 1: Write the fake backends**
 
 A single `.fs` file can host only one global (head) type, so the fake backends ship as
-four files, each with one head type, sharing the same namespace.
+four files, each with one head type, sharing the same namespace. `FakeBackend` is a
+`trait_name`, not an `abstract class_name`: Foundry Script cannot resolve one file's
+`class_name` as another file's base class, so a fake that needs both `FakeBackend`'s
+contract and a concrete base extends `RefCounted` directly and composes the contract with
+`uses`.
 
 Create `test_project/tests/support/fake_backend.notest.fs`:
 
@@ -1469,7 +1473,7 @@ Create `test_project/tests/support/fake_backend.notest.fs`:
 namespace games.cafecito.foundrykit.tests.support
 
 ## Minimal backend contract used to exercise [BackendFactory] without a real subsystem.
-abstract class_name FakeBackend extends RefCounted
+trait_name FakeBackend
 
 abstract func backend_name() -> String
 
@@ -1482,7 +1486,8 @@ Create `test_project/tests/support/fake_platform_backend.notest.fs`:
 namespace games.cafecito.foundrykit.tests.support
 
 ## Stands in for a working platform backend.
-class_name FakePlatformBackend extends FakeBackend
+class_name FakePlatformBackend extends RefCounted
+uses FakeBackend
 
 var _name: String = ""
 
@@ -1502,7 +1507,8 @@ Create `test_project/tests/support/fake_null_backend.notest.fs`:
 namespace games.cafecito.foundrykit.tests.support
 
 ## Stands in for the no-op backend used on unsupported platforms and partial installs.
-class_name FakeNullBackend extends FakeBackend
+class_name FakeNullBackend extends RefCounted
+uses FakeBackend
 
 func backend_name() -> String:
 	return "null"
