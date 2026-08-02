@@ -97,6 +97,11 @@ func _on_native_failed(code: int, message: String) -> void:
 	_resolve(NativeOutcome.Failed(code, message))
 
 func _on_timeout() -> void:
+	# The watchdog timer stays connected until the request settles, so a request that
+	# already succeeded, failed or was abandoned can still reach here. Check first so a
+	# completed request is never misreported as timed out.
+	if _has_settled:
+		return
 	var elapsed_seconds: float = float(Time.get_ticks_msec() - _started_ticks_ms) / 1000.0
 	_log.warn("native request timed out after %.1fs" % elapsed_seconds)
 	_resolve(NativeOutcome.TimedOut(elapsed_seconds))
