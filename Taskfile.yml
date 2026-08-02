@@ -1,0 +1,22 @@
+version: '3'
+
+tasks:
+  default:
+    desc: Run the Foundry Script test suite
+    deps: [test:foundrylib]
+
+  lint:
+    desc: Run all linters and formatters via prek
+    cmds:
+      - prek run --all-files
+
+  test:foundrylib:
+    desc: Run the FoundryLib testlib suite headless
+    cmds:
+      - scripts/test-foundrylib
+
+  test:scripts:
+    desc: Run build-script and boundary regression checks
+    cmds:
+      - scripts/test-import-boundaries
+      - scripts/test-foundry-script-strict

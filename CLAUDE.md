@@ -110,6 +110,28 @@ Breaking one is a defect, not a style preference.
   reject `=` on every case.
 - Prefer full words in identifiers. `definition`, not `def`; `position`, not `pos`.
 
+### Verified engine behaviour
+
+Confirmed against the engine by `test_project/tests/syntax-probe.test.fs`. Trust this
+over the grammar document where they disagree.
+
+**Works:** tagged unions with payload binds and exhaustive `match`; `tuple` declarations
+with named fields; generic traits; a trait carrying a **concrete** method alongside
+`abstract func` requirements; inline property accessors (`get:` / `set(value):`); rest
+parameters; nullable types (`T?`).
+
+**Does not work, with the fix:**
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `Typed arrays are currently not supported for the rest parameter` | `...values: Array[Variant]` | Use untyped `...values: Array`; keep elements Variant |
+| `Expected ":" after class declaration` on an inner class | `uses` on its own line | Inner classes need `uses` on the declaration line: `class Foo uses Bar[int]:`. Only file-level `class_name` may put `extends`/`uses` on following lines |
+| `requires the subtype "int" … but the supertype "Variant" was provided` | `int(some_variant)` under `unsafe_call_argument=2` | Avoid numeric conversion of Variant; keep values as Variant, or narrow with an explicit typed local first |
+
+The test project sets `untyped_declaration`, `unsafe_cast`, `unsafe_call_argument`,
+`unsafe_method_access` and `unsafe_property_access` to **error**. Code that is merely
+warned about elsewhere fails the suite here.
+
 ## Testing
 
 Tests live in `test_project/tests/` as `*.test.fs` and use FoundryLib's `foundry.testlib`

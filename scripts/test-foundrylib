@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+project_dir="$repo_root/test_project"
+
+fail() {
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+resolve_foundry_bin() {
+    local fallback="/Users/christian/CafecitoGames/Foundry/bin/foundry.macos.editor.dev.arm64"
+
+    if [ -n "${FOUNDRY_BIN:-}" ]; then
+        [ -x "$FOUNDRY_BIN" ] || fail "FOUNDRY_BIN is set but is not executable: $FOUNDRY_BIN"
+        printf '%s\n' "$FOUNDRY_BIN"
+        return
+    fi
+
+    if command -v foundry >/dev/null 2>&1; then
+        command -v foundry
+        return
+    fi
+
+    if [ -x "$fallback" ]; then
+        printf '%s\n' "$fallback"
+        return
+    fi
+
+    fail "Foundry executable not found. Set FOUNDRY_BIN or put foundry on PATH."
+}
+
+command -v anvil >/dev/null 2>&1 || \
+    fail "anvil is required. Install with: go install github.com/cafecito-games/foundry-tools/cmd/anvil@latest"
+
+foundry_bin=$(resolve_foundry_bin)
+
+if [ -z "${GITHUB_TOKEN:-}" ] && [ -n "${GH_TOKEN:-}" ]; then
+    export GITHUB_TOKEN="$GH_TOKEN"
+fi
+
+if [ -z "${GITHUB_TOKEN:-}" ] && command -v gh >/dev/null 2>&1; then
+    if token=$(gh auth token 2>/dev/null); then
+        export GITHUB_TOKEN="$token"
+    fi
+fi
+
+if [ "${FOUNDRYKIT_SKIP_ANVIL_INSTALL:-}" != "1" ]; then
+    anvil pkg install --dir "$project_dir"
+fi
+
+# The engine's headless global-class scan never follows directory symlinks, so the addon
+# must be a real directory inside the test project. Native binaries stay out of the copy:
+# this suite is script-only.
+if [ -L "$project_dir/addons/FoundryKit" ]; then
+    rm "$project_dir/addons/FoundryKit"
+fi
+rsync -a --delete --delete-excluded \
+    --exclude 'bin/' \
+    --exclude '*.foundryextension' \
+    "$repo_root/addons/FoundryKit/" "$project_dir/addons/FoundryKit/"
+
+"$foundry_bin" --headless project test \
+    --project "$project_dir" \
+    --runner res://addons/foundrylib/testlib/cli/run.fs \
+    -- --path res://tests

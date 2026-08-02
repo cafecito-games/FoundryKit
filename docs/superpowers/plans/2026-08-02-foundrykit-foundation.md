@@ -1172,7 +1172,10 @@ async func await_outcome(
 func abandon() -> void:
 	_resolve(NativeOutcome.Abandoned)
 
-func _on_native_success(...values: Array[Variant]) -> void:
+## The rest parameter cannot be a typed array — the engine rejects
+## `...values: Array[Variant]` with "Typed arrays are currently not supported for the
+## rest parameter". Elements stay Variant and are copied into the payload unconverted.
+func _on_native_success(...values: Array) -> void:
 	var payload: Dictionary[String, Variant] = {}
 	var count: int = mini(_payload_fields.size(), values.size())
 	for index: int in range(count):
@@ -1573,10 +1576,9 @@ func resolve_current() -> TBackend:
 	return resolve(Platform.current())
 ```
 
-If a trait cannot carry a concrete method body alongside `abstract func` requirements,
-move `resolve` and `resolve_current` into a `BackendResolver` static helper taking the
-factory as a parameter, and update the tests to call
-`BackendResolver.resolve(_factory, PlatformKind.IOS)`.
+A trait carrying a concrete method body alongside `abstract func` requirements is
+**verified working** — see `test_trait_concrete_method_composes_abstract_requirements` in
+`test_project/tests/syntax-probe.test.fs`. No fallback is needed here.
 
 - [ ] **Step 5: Run test to verify it passes**
 

@@ -1,0 +1,7 @@
+[packages]
+  [packages.foundrylib]
+    source      = "git"
+    url         = "https://github.com/cafecito-games/FoundryLib.git"
+    version     = "6df2b4d7ff43c013a4c9e9033c01cdadbdeda19a"
+    source_path = "addons/foundrylib"
+    install_as  = "foundrylib"
