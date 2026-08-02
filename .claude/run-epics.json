@@ -1,0 +1,17 @@
+{
+  "baseBranch": "main",
+  "setupCommands": [],
+  "testCommands": [
+    "task test:foundrylib"
+  ],
+  "lintCommands": [
+    "prek run --all-files"
+  ],
+  "prLabels": [],
+  "mergeMethod": "squash",
+  "codexReview": true,
+  "agentRouting": {
+    "default": "foundry-script-developer",
+    "infra": "general-purpose"
+  }
+}
