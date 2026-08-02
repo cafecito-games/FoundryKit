@@ -57,6 +57,7 @@ while IFS= read -r -d '' path; do
         }
         { lines[NR] = $0 }
         END {
+            # Explicitly annotated identifiers: `name: NativeOutcome`.
             for (i = 1; i <= NR; i++) {
                 tmp = lines[i]
                 while (match(tmp, /[A-Za-z_][A-Za-z0-9_]*[ \t]*:[ \t]*NativeOutcome([^A-Za-z0-9_]|$)/)) {
@@ -66,6 +67,38 @@ while IFS= read -r -d '' path; do
                     gsub(/^[ \t(,]+/, "", name)
                     outcome_vars[name] = 1
                     tmp = substr(tmp, RSTART + RLENGTH)
+                }
+            }
+            # Functions whose declared return type is NativeOutcome, so an inferred
+            # `:=` assignment from a call to one of them is recognised too.
+            for (i = 1; i <= NR; i++) {
+                if (match(lines[i], /func[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*\(/)) {
+                    if (lines[i] ~ /->[ \t]*NativeOutcome([^A-Za-z0-9_]|$)/) {
+                        fname = lines[i]
+                        sub(/^.*func[ \t]+/, "", fname)
+                        sub(/[ \t]*\(.*$/, "", fname)
+                        outcome_funcs[fname] = 1
+                    }
+                }
+            }
+            # Inferred identifiers: `name := NativeOutcome.Variant(...)` or
+            # `name := some_function_returning_native_outcome(...)`.
+            for (i = 1; i <= NR; i++) {
+                if (match(lines[i], /[A-Za-z_][A-Za-z0-9_]*[ \t]*:=[ \t]*/)) {
+                    segment = substr(lines[i], RSTART, RLENGTH)
+                    name = segment
+                    sub(/[ \t]*:=.*/, "", name)
+                    gsub(/^[ \t]+/, "", name)
+                    rhs = substr(lines[i], RSTART + RLENGTH)
+                    if (rhs ~ /^NativeOutcome\./) {
+                        outcome_vars[name] = 1
+                    } else if (match(rhs, /^[A-Za-z_][A-Za-z0-9_]*[ \t]*\(/)) {
+                        callee = substr(rhs, 1, RLENGTH)
+                        sub(/[ \t]*\(.*/, "", callee)
+                        if (callee in outcome_funcs) {
+                            outcome_vars[name] = 1
+                        }
+                    }
                 }
             }
             for (i = 1; i <= NR; i++) {
