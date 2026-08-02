@@ -56,7 +56,10 @@ async func await_outcome(
 
 	var tree: SceneTree = Engine.get_main_loop() as SceneTree
 	if tree != null:
-		var timer: SceneTreeTimer = tree.create_timer(timeout_seconds)
+		# The watchdog bounds a native OS-level call, not game simulation — it must keep
+		# running even while the game is paused or its time scale is zero.
+		var timer: SceneTreeTimer = tree.create_timer(
+				timeout_seconds, true, false, true)
 		timer.timeout.connect(_on_timeout)
 
 	var outcome: NativeOutcome = await _settled
