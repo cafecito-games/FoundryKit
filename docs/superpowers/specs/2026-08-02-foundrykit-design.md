@@ -171,6 +171,36 @@ project settings `foundry_kit/subsystems/{auth,purchase,mobile}_enabled`. Withou
 a keyboard-only game inherits Play Billing and Credentials dependencies for binaries it
 deleted.
 
+### Protocol requirement: per-call correlation token
+
+Every native operation added by plans 2–5 that follows the `NativeRequest` request/
+response shape — an async call awaiting a paired success or failure emission — must, on
+both platforms and across all three subsystems, carry a per-call correlation token,
+echoed back in both emissions, so a response can be matched to the request that issued
+it. This does not extend to operations with no request to correlate: Mobile's
+`keyboard_state()` is a synchronous query, and unsolicited signals such as Auth's
+`session_expired` and `tokens_refreshed` are not answering any specific call. The
+requirement is a precondition for request/response operations in those plans, not an
+optional refinement: none of Apple's four extensions, Android's four library modules, or
+the two remaining Apple targets exist yet to be given the token, but every one of them
+must speak a protocol that carries it once they do.
+
+The requirement exists because a native signal carries no request identity of its own.
+If request A's watchdog times it out (or the app returns to foreground with A abandoned)
+while A's underlying native operation is still running, `RequestGuard.end()` releases the
+single-flight gate and a later request B can connect to the same native target and signal
+names; if A's operation then finally emits, B has no way to tell the emission is not its
+own. `RequestGuard` only serialises requests and detects abandonment, and `NativeRequest`
+only adapts one request's signals into one awaited outcome — correlating a specific
+emission to a specific request is neither class's job, and neither can close this gap
+without the protocol supplying an identifier to filter on. `RequestGuard` and
+`NativeRequest` are both correct as written; the gap is in what the native protocol
+carries, not in how the current script layer consumes it. Carrying the token is only half
+the fix — plan 2's adapter must also record the token it sent and discard any emission
+that echoes back a different one, or a mismatched one it does not recognize. That
+filtering is plan-2 work on the script layer, out of scope here; this requirement only
+constrains the protocol so that work is possible.
+
 ### Partial installs are supported
 
 A consumer may delete any subsystem's `bin/` directory. The `.fs` layer must degrade
