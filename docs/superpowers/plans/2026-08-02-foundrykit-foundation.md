@@ -1264,82 +1264,36 @@ git commit -m "feat(core): add async native signal bridge"
 
 **Verify:** `task test:foundrylib` → `RequestGuardTests` all pass
 
+**The shipped implementation is authoritative, not the code below.** An earlier version
+of this task's code block had three race conditions around the grace-period timer that
+its own nine acceptance tests did not catch, all found by Codex review and fixed on
+`main` (issue #8 / PR #23):
+
+1. A stale grace timer could abandon a *later, unrelated* request — fixed with a
+   request-generation token (`_request_generation`, bumped on every `begin()`/`end()`).
+2. A pending grace timer survived a *second* focus loss — fixed with a focus-generation
+   token (`_focus_generation`, bumped on every `notify_focus_lost()`); the timer callback
+   checks both tokens still match before emitting `recovery_due`.
+3. Repeated foreground notifications could schedule *duplicate* recovery timers — fixed
+   by tracking `_recovery_scheduled_focus_generation` so `notify_focus_gained()` schedules
+   at most one timer per backgrounding.
+
+Read `addons/FoundryKit/core/RequestGuard.fs` and `test_project/tests/request-guard.test.fs`
+on `main` before implementing this task; do not reproduce the original nine-test,
+race-prone version documented in earlier drafts of this plan. The shipped test file adds
+four regression tests beyond the original nine:
+`test_stale_grace_timer_does_not_abandon_a_later_request`,
+`test_focus_loss_before_grace_elapses_cancels_the_pending_recovery`,
+`test_repeated_focus_gained_notifications_emit_recovery_due_once`, and a counter-based
+`_on_recovery_due` helper replacing the two inline lambda connections the original test
+file used.
+
 **Steps:**
 
 - [ ] **Step 1: Write the failing test**
 
-Create `test_project/tests/request-guard.test.fs`:
-
-```
-namespace games.cafecito.foundrykit.tests
-
-import foundry.testlib
-import games.cafecito.foundrykit.core
-
-class_name RequestGuardTests
-extends RefCounted
-uses Test
-
-var _log: FoundryKitLog
-var _guard: RequestGuard
-
-func before_each() -> void:
-	_log = FoundryKitLog.new("test")
-	_guard = RequestGuard.new(_log)
-	_guard.set_grace_seconds(0.02)
-
-func test_first_begin_is_accepted() -> void:
-	Expect.that(_guard.begin()).to_be_true()
-
-func test_second_begin_while_active_is_rejected() -> void:
-	_guard.begin()
-	Expect.that(_guard.begin()).to_be_false()
-
-func test_end_releases_the_gate() -> void:
-	_guard.begin()
-	_guard.end()
-	Expect.that(_guard.begin()).to_be_true()
-
-func test_is_active_reflects_gate_state() -> void:
-	Expect.that(_guard.is_active()).to_be_false()
-	_guard.begin()
-	Expect.that(_guard.is_active()).to_be_true()
-	_guard.end()
-	Expect.that(_guard.is_active()).to_be_false()
-
-func test_focus_loss_during_active_request_marks_backgrounded() -> void:
-	_guard.begin()
-	_guard.notify_focus_lost()
-	Expect.that(_guard.was_backgrounded()).to_be_true()
-
-func test_focus_loss_without_active_request_does_not_mark_backgrounded() -> void:
-	_guard.notify_focus_lost()
-	Expect.that(_guard.was_backgrounded()).to_be_false()
-
-func test_focus_regain_on_backgrounded_request_emits_recovery_due() -> void:
-	var fired: bool = false
-	_guard.recovery_due.connect(func() -> void: fired = true)
-	_guard.begin()
-	_guard.notify_focus_lost()
-	_guard.notify_focus_gained()
-	await _guard.recovery_due
-	Expect.that(fired).to_be_true()
-
-func test_focus_regain_without_active_request_emits_nothing() -> void:
-	var fired: bool = false
-	_guard.recovery_due.connect(func() -> void: fired = true)
-	_guard.notify_focus_gained()
-	Expect.that(fired).to_be_false()
-
-func test_end_clears_backgrounded_state() -> void:
-	_guard.begin()
-	_guard.notify_focus_lost()
-	_guard.end()
-	Expect.that(_guard.was_backgrounded()).to_be_false()
-```
-
-If inline lambda syntax (`func() -> void: ...`) proves unavailable, replace the two
-lambda connections with a counter method on the test class and connect that instead.
+Copy `test_project/tests/request-guard.test.fs` from `main` (13 tests covering the gate,
+focus tracking, and the three timer races above).
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1348,84 +1302,15 @@ Expected: FAIL — `RequestGuard` is not defined.
 
 - [ ] **Step 3: Create `addons/FoundryKit/core/RequestGuard.fs`**
 
-```
-namespace games.cafecito.foundrykit.core
-
-## Serialises native requests and detects abandoned native sheets.
-##
-## Native sign-in and purchase sheets take over the screen, so at most one request may be
-## outstanding at a time. A user can also dismiss such a sheet without the native emitting
-## anything; the only observable signal is the app regaining focus with a request still
-## active. After a short grace period — long enough for a real native response to arrive
-## first — this emits [signal recovery_due] so the subsystem can abandon the request.
-class_name RequestGuard extends RefCounted
-
-const _DEFAULT_GRACE_SECONDS: float = 1.0
-
-## Emitted when an active request should be treated as abandoned.
-signal recovery_due()
-
-var _log: FoundryKitLog
-var _is_active: bool = false
-var _was_backgrounded: bool = false
-var _grace_seconds: float = _DEFAULT_GRACE_SECONDS
-
-func _init(log: FoundryKitLog) -> void:
-	_log = log
-
-## Claims the gate. Returns false when a request is already outstanding.
-func begin() -> bool:
-	if _is_active:
-		_log.warn("rejected a request while another is still in progress")
-		return false
-	_is_active = true
-	_was_backgrounded = false
-	return true
-
-## Releases the gate.
-func end() -> void:
-	_is_active = false
-	_was_backgrounded = false
-
-func is_active() -> bool:
-	return _is_active
-
-func was_backgrounded() -> bool:
-	return _was_backgrounded
-
-func set_grace_seconds(seconds: float) -> void:
-	_grace_seconds = seconds
-
-## Records that the app lost focus. Only meaningful while a request is active.
-func notify_focus_lost() -> void:
-	if not _is_active:
-		return
-	_was_backgrounded = true
-	_log.debug("request backgrounded")
-
-## Records that the app regained focus, scheduling recovery when a backgrounded request
-## is still outstanding.
-func notify_focus_gained() -> void:
-	if not _is_active or not _was_backgrounded:
-		return
-	_log.debug("request returned to foreground; scheduling recovery")
-	var tree: SceneTree = Engine.get_main_loop() as SceneTree
-	if tree == null:
-		recovery_due.emit()
-		return
-	var timer: SceneTreeTimer = tree.create_timer(_grace_seconds)
-	timer.timeout.connect(_on_grace_elapsed)
-
-func _on_grace_elapsed() -> void:
-	if not _is_active:
-		return
-	recovery_due.emit()
-```
+Copy `addons/FoundryKit/core/RequestGuard.fs` from `main`. It uses a request-generation
+token, a focus-generation token, and a per-backgrounding recovery-scheduled flag to close
+the three races described above — see the file's doc comments for the invariant each
+token protects.
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `task test:foundrylib`
-Expected: PASS — 9 tests in `RequestGuardTests`.
+Expected: PASS — 13 tests in `RequestGuardTests`.
 
 - [ ] **Step 5: Commit**
 
@@ -1462,10 +1347,12 @@ git commit -m "feat(core): add request guard with foreground recovery"
 
 A single `.fs` file can host only one global (head) type, so the fake backends ship as
 four files, each with one head type, sharing the same namespace. `FakeBackend` is a
-`trait_name`, not an `abstract class_name`: Foundry Script cannot resolve one file's
-`class_name` as another file's base class, so a fake that needs both `FakeBackend`'s
-contract and a concrete base extends `RefCounted` directly and composes the contract with
-`uses`.
+`trait_name`, not an `abstract class_name`. Bare-name `extends SomeClass` cannot resolve
+one file's `class_name` as another file's base class — only the path-form
+`extends "res://..."` can (see the design spec's "Language constraints") — and
+composition avoids coupling a fake to a `res://` path for its contract, so a fake that
+needs both `FakeBackend`'s contract and a concrete base extends `RefCounted` directly and
+composes the contract with `uses`.
 
 Create `test_project/tests/support/fake_backend.notest.fs`:
 
