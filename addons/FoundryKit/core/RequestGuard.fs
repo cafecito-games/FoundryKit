@@ -20,6 +20,7 @@ var _was_backgrounded: bool = false
 var _grace_seconds: float = _DEFAULT_GRACE_SECONDS
 var _request_generation: int = 0
 var _focus_generation: int = 0
+var _recovery_scheduled_focus_generation: int = -1
 
 func _init(log: FoundryKitLog) -> void:
 	_log = log
@@ -62,10 +63,15 @@ func notify_focus_lost() -> void:
 	_log.debug("request backgrounded")
 
 ## Records that the app regained focus, scheduling recovery when a backgrounded request
-## is still outstanding.
+## is still outstanding. A platform can report one foreground return through more than
+## one notification (for example Android's resumed and focus-in callbacks), so this is a
+## no-op once a recovery has already been scheduled for the current backgrounding.
 func notify_focus_gained() -> void:
 	if not _is_active or not _was_backgrounded:
 		return
+	if _recovery_scheduled_focus_generation == _focus_generation:
+		return
+	_recovery_scheduled_focus_generation = _focus_generation
 	_log.debug("request returned to foreground; scheduling recovery")
 	var scheduled_request_generation: int = _request_generation
 	var scheduled_focus_generation: int = _focus_generation

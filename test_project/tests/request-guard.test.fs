@@ -88,3 +88,12 @@ func test_focus_loss_before_grace_elapses_cancels_the_pending_recovery() -> void
 	await Async.seconds(0.05)
 	Expect.that(_recovery_due_count).to_equal(0)
 	Expect.that(_guard.is_active()).to_be_true()
+
+func test_repeated_focus_gained_notifications_emit_recovery_due_once() -> void:
+	_guard.recovery_due.connect(_on_recovery_due)
+	_guard.begin()
+	_guard.notify_focus_lost()
+	_guard.notify_focus_gained()
+	_guard.notify_focus_gained()
+	await Async.seconds(0.05)
+	Expect.that(_recovery_due_count).to_equal(1)
