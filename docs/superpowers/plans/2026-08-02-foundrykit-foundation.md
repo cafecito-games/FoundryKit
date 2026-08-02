@@ -25,6 +25,7 @@
 | `addons/FoundryKit/FoundryKit.fs` | `@autoload` facade: logging control, platform info, lifecycle fan-out |
 | `addons/FoundryKit/core/PlatformKind.fs` | Platform enum |
 | `addons/FoundryKit/core/Platform.fs` | OS-name → `PlatformKind` detection |
+| `addons/FoundryKit/core/LogLevel.fs` | Log severity levels, least to most severe |
 | `addons/FoundryKit/core/FoundryKitLog.fs` | Per-instance leveled logger with `child()` |
 | `addons/FoundryKit/core/NativeOutcome.fs` | The one shared outcome union |
 | `addons/FoundryKit/core/NativeBridge.fs` | Guarded `ClassDB` probe / instantiate |
@@ -529,8 +530,14 @@ git commit -m "feat(core): add platform detection"
 **Goal:** `FoundryKitLog` — a per-instance leveled logger with named children, so three dynamically loaded frameworks never contend on a shared static logging flag.
 
 **Files:**
+- Create: `addons/FoundryKit/core/LogLevel.fs`
 - Create: `addons/FoundryKit/core/FoundryKitLog.fs`
 - Test: `test_project/tests/log.test.fs`
+
+A single `.fs` file can host only one global (head) type — the engine's headless
+global-class scan registers one head type per file. `LogLevel` and `FoundryKitLog` are
+both head types (`enum_name` and `class_name` respectively), so they ship as two files,
+mirroring the `PlatformKind.fs` / `Platform.fs` split from Task 1.
 
 **Acceptance Criteria:**
 - [ ] Log level is per-instance; changing one instance's level does not affect another
@@ -613,7 +620,7 @@ func test_level_ordering_filters_lower_severities() -> void:
 Run: `task test:foundrylib`
 Expected: FAIL — `FoundryKitLog` and `LogLevel` are not defined.
 
-- [ ] **Step 3: Create `addons/FoundryKit/core/FoundryKitLog.fs`**
+- [ ] **Step 3: Create `addons/FoundryKit/core/LogLevel.fs`**
 
 ```
 namespace games.cafecito.foundrykit.core
@@ -624,6 +631,12 @@ enum_name LogLevel:
 	INFO = 1
 	WARN = 2
 	ERROR = 3
+```
+
+- [ ] **Step 4: Create `addons/FoundryKit/core/FoundryKitLog.fs`**
+
+```
+namespace games.cafecito.foundrykit.core
 
 ## A named, leveled logger.
 ##
@@ -693,15 +706,16 @@ func _emit(severity: LogLevel, message: String) -> void:
 			push_error(formatted)
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 5: Run test to verify it passes**
 
 Run: `task test:foundrylib`
 Expected: PASS — 8 tests in `FoundryKitLogTests`.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add addons/FoundryKit/core/FoundryKitLog.fs test_project/tests/log.test.fs
+git add addons/FoundryKit/core/LogLevel.fs addons/FoundryKit/core/FoundryKitLog.fs \
+        test_project/tests/log.test.fs
 git commit -m "feat(core): add per-instance leveled logger"
 ```
 
@@ -842,8 +856,12 @@ git commit -m "feat(core): add native outcome union"
 - [ ] **Step 1: Write the failing test**
 
 `RefCounted` is a real, instantiable engine class, so it stands in for a present native.
-`Object` subclasses that cannot be instantiated are represented by an abstract engine
-class name.
+`Object` subclasses that cannot be instantiated are represented by a genuinely abstract
+engine class name, not merely a virtual one: `InputEvent` is registered with
+`FOUNDRY_REGISTER_ABSTRACT_CLASS`, which leaves `creation_func` unset, so
+`ClassDB.can_instantiate("InputEvent")` is `false`. `Texture` is *not* a valid stand-in —
+it is registered with `FOUNDRY_REGISTER_VIRTUAL_CLASS`, which still sets `creation_func`,
+so `ClassDB.can_instantiate("Texture")` is `true` and the abstract path never runs.
 
 Create `test_project/tests/native-bridge.test.fs`:
 
@@ -884,9 +902,9 @@ func test_missing_class_is_logged_at_debug() -> void:
 	Expect.that(_log.captured().size()).to_equal(1)
 
 func test_registered_but_abstract_class_is_unavailable() -> void:
-	# Texture is registered but abstract, so it exists and cannot be instantiated.
-	Expect.that(ClassDB.class_exists("Texture")).to_be_true()
-	Expect.that(_bridge.is_available("Texture")).to_be_false()
+	# InputEvent is registered but abstract, so it exists and cannot be instantiated.
+	Expect.that(ClassDB.class_exists("InputEvent")).to_be_true()
+	Expect.that(_bridge.is_available("InputEvent")).to_be_false()
 
 func test_empty_class_name_is_unavailable() -> void:
 	Expect.that(_bridge.is_available("")).to_be_false()
@@ -1424,7 +1442,10 @@ git commit -m "feat(core): add request guard with foreground recovery"
 
 **Files:**
 - Create: `addons/FoundryKit/core/BackendFactory.fs`
-- Create: `test_project/tests/support/fake_backends.notest.fs`
+- Create: `test_project/tests/support/fake_backend.notest.fs`
+- Create: `test_project/tests/support/fake_platform_backend.notest.fs`
+- Create: `test_project/tests/support/fake_null_backend.notest.fs`
+- Create: `test_project/tests/support/fake_backend_factory.notest.fs`
 - Test: `test_project/tests/backend-factory.test.fs`
 
 **Acceptance Criteria:**
@@ -1439,22 +1460,34 @@ git commit -m "feat(core): add request guard with foreground recovery"
 
 - [ ] **Step 1: Write the fake backends**
 
-Create `test_project/tests/support/fake_backends.notest.fs`:
+A single `.fs` file can host only one global (head) type, so the fake backends ship as
+four files, each with one head type, sharing the same namespace. `FakeBackend` is a
+`trait_name`, not an `abstract class_name`: Foundry Script cannot resolve one file's
+`class_name` as another file's base class, so a fake that needs both `FakeBackend`'s
+contract and a concrete base extends `RefCounted` directly and composes the contract with
+`uses`.
+
+Create `test_project/tests/support/fake_backend.notest.fs`:
 
 ```
 namespace games.cafecito.foundrykit.tests.support
 
-import games.cafecito.foundrykit.core
-
 ## Minimal backend contract used to exercise [BackendFactory] without a real subsystem.
-abstract class_name FakeBackend extends RefCounted
+trait_name FakeBackend
 
 abstract func backend_name() -> String
 
 abstract func is_available() -> bool
+```
+
+Create `test_project/tests/support/fake_platform_backend.notest.fs`:
+
+```
+namespace games.cafecito.foundrykit.tests.support
 
 ## Stands in for a working platform backend.
-class_name FakePlatformBackend extends FakeBackend
+class_name FakePlatformBackend extends RefCounted
+uses FakeBackend
 
 var _name: String = ""
 
@@ -1466,15 +1499,30 @@ func backend_name() -> String:
 
 func is_available() -> bool:
 	return true
+```
+
+Create `test_project/tests/support/fake_null_backend.notest.fs`:
+
+```
+namespace games.cafecito.foundrykit.tests.support
 
 ## Stands in for the no-op backend used on unsupported platforms and partial installs.
-class_name FakeNullBackend extends FakeBackend
+class_name FakeNullBackend extends RefCounted
+uses FakeBackend
 
 func backend_name() -> String:
 	return "null"
 
 func is_available() -> bool:
 	return false
+```
+
+Create `test_project/tests/support/fake_backend_factory.notest.fs`:
+
+```
+namespace games.cafecito.foundrykit.tests.support
+
+import games.cafecito.foundrykit.core
 
 ## A factory that supplies platform backends for Apple and Android only.
 class_name FakeBackendFactory extends RefCounted
@@ -1493,10 +1541,6 @@ func for_platform(platform: PlatformKind) -> FakeBackend?:
 func null_backend() -> FakeBackend:
 	return FakeNullBackend.new()
 ```
-
-If a single `.fs` file cannot declare multiple `class_name` types, split these into
-`fake_backend.notest.fs`, `fake_platform_backend.notest.fs`, `fake_null_backend.notest.fs`
-and `fake_backend_factory.notest.fs`, one type per file, keeping the same namespace.
 
 - [ ] **Step 2: Write the failing test**
 
@@ -1519,26 +1563,38 @@ func before_each() -> void:
 	_factory = FakeBackendFactory.new()
 
 func test_ios_resolves_to_apple_backend() -> void:
-	Expect.that(_factory.resolve(PlatformKind.IOS).backend_name()).to_equal("apple")
+	var backend: FakeBackend = _factory.resolve(PlatformKind.IOS)
+	Expect.that(backend.backend_name()).to_equal("apple")
 
 func test_macos_resolves_to_apple_backend() -> void:
-	Expect.that(_factory.resolve(PlatformKind.MACOS).backend_name()).to_equal("apple")
+	var backend: FakeBackend = _factory.resolve(PlatformKind.MACOS)
+	Expect.that(backend.backend_name()).to_equal("apple")
 
 func test_android_resolves_to_android_backend() -> void:
-	Expect.that(_factory.resolve(PlatformKind.ANDROID).backend_name()).to_equal("android")
+	var backend: FakeBackend = _factory.resolve(PlatformKind.ANDROID)
+	Expect.that(backend.backend_name()).to_equal("android")
 
 func test_desktop_resolves_to_null_backend() -> void:
-	Expect.that(_factory.resolve(PlatformKind.DESKTOP).backend_name()).to_equal("null")
+	var backend: FakeBackend = _factory.resolve(PlatformKind.DESKTOP)
+	Expect.that(backend.backend_name()).to_equal("null")
 
 func test_unknown_resolves_to_null_backend() -> void:
-	Expect.that(_factory.resolve(PlatformKind.UNKNOWN).backend_name()).to_equal("null")
+	var backend: FakeBackend = _factory.resolve(PlatformKind.UNKNOWN)
+	Expect.that(backend.backend_name()).to_equal("null")
 
 func test_null_backend_reports_unavailable() -> void:
-	Expect.that(_factory.resolve(PlatformKind.DESKTOP).is_available()).to_be_false()
+	var backend: FakeBackend = _factory.resolve(PlatformKind.DESKTOP)
+	Expect.that(backend.is_available()).to_be_false()
 
 func test_platform_backend_reports_available() -> void:
-	Expect.that(_factory.resolve(PlatformKind.IOS).is_available()).to_be_true()
+	var backend: FakeBackend = _factory.resolve(PlatformKind.IOS)
+	Expect.that(backend.is_available()).to_be_true()
 ```
+
+Calling a method directly on the return value of `resolve()` — a concrete method on the
+generic trait itself, not overridden by `FakeBackendFactory` — fails `unsafe_method_access`
+under this project's strict settings. Bind the result to an explicitly typed local first,
+then call the method on that local, as above.
 
 - [ ] **Step 3: Run test to verify it fails**
 
@@ -1578,7 +1634,9 @@ func resolve_current() -> TBackend:
 
 A trait carrying a concrete method body alongside `abstract func` requirements is
 **verified working** — see `test_trait_concrete_method_composes_abstract_requirements` in
-`test_project/tests/syntax-probe.test.fs`. No fallback is needed here.
+`test_project/tests/syntax-probe.test.fs`. No fallback is needed here. Callers do need the
+typed-local workaround noted in Step 2 whenever they chain a call directly onto
+`resolve()`'s return value.
 
 - [ ] **Step 5: Run test to verify it passes**
 
@@ -1589,7 +1647,10 @@ Expected: PASS — 7 tests in `BackendFactoryTests`.
 
 ```bash
 git add addons/FoundryKit/core/BackendFactory.fs \
-        test_project/tests/support/fake_backends.notest.fs \
+        test_project/tests/support/fake_backend.notest.fs \
+        test_project/tests/support/fake_platform_backend.notest.fs \
+        test_project/tests/support/fake_null_backend.notest.fs \
+        test_project/tests/support/fake_backend_factory.notest.fs \
         test_project/tests/backend-factory.test.fs
 git commit -m "feat(core): add generic backend factory trait"
 ```
@@ -1899,7 +1960,7 @@ assert_contains "$facade" '^namespace games\.cafecito\.foundrykit$' \
 assert_contains "$facade" '^class_name FoundryKit extends Node$' \
     "FoundryKit.fs must be a globally named Node autoload"
 
-for core_file in PlatformKind Platform FoundryKitLog NativeOutcome NativeBridge \
+for core_file in PlatformKind Platform LogLevel FoundryKitLog NativeOutcome NativeBridge \
                  NativeRequest RequestGuard BackendFactory
 do
     path="$addon/core/${core_file}.fs"

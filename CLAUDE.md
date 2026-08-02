@@ -116,7 +116,10 @@ Confirmed against the engine by `test_project/tests/syntax-probe.test.fs`. Trust
 over the grammar document where they disagree.
 
 **Works:** tagged unions with payload binds and exhaustive `match`; `tuple` declarations
-with named fields; generic traits; a trait carrying a **concrete** method alongside
+with named fields; nested (inner) `class` / `trait` / `enum` / `tuple` declarations inside
+a single head type — exempt from the one-global-type-per-file rule below; generic traits,
+*provided* a call is not chained directly onto the return value of the trait's own
+concrete method (see table); a trait carrying a **concrete** method alongside
 `abstract func` requirements; inline property accessors (`get:` / `set(value):`); rest
 parameters; nullable types (`T?`).
 
@@ -127,6 +130,9 @@ parameters; nullable types (`T?`).
 | `Typed arrays are currently not supported for the rest parameter` | `...values: Array[Variant]` | Use untyped `...values: Array`; keep elements Variant |
 | `Expected ":" after class declaration` on an inner class | `uses` on its own line | Inner classes need `uses` on the declaration line: `class Foo uses Bar[int]:`. Only file-level `class_name` may put `extends`/`uses` on following lines |
 | `requires the subtype "int" … but the supertype "Variant" was provided` | `int(some_variant)` under `unsafe_call_argument=2` | Avoid numeric conversion of Variant; keep values as Variant, or narrow with an explicit typed local first |
+| `Could not find type "X" in the current scope` | More than one global (head) `class_name` / `enum_name` / `trait_name` declared in one `.fs` file — the headless global-class scan registers only the first head type per file | Split into one head type per `.fs` file. Nested declarations inside a single head type are unaffected |
+| `unsafe_method_access` on a chained call, reporting the unspecialised type-parameter name instead of the composed concrete type | Calling a method directly on the return value of a generic trait's own **concrete** method (one not overridden by the composing class) | Bind the call to an explicitly typed local first, then call the method on that local |
+| `ClassDB.can_instantiate(name)` returns `true` for a class meant to stand in for "registered but abstract" | `FOUNDRY_REGISTER_VIRTUAL_CLASS` (e.g. `Texture`) still sets `creation_func`, so the class remains instantiable | Use a genuinely abstract class such as `InputEvent`, registered with `FOUNDRY_REGISTER_ABSTRACT_CLASS`, not a virtual one like `Texture` |
 
 The test project sets `untyped_declaration`, `unsafe_cast`, `unsafe_call_argument`,
 `unsafe_method_access` and `unsafe_property_access` to **error**. Code that is merely
