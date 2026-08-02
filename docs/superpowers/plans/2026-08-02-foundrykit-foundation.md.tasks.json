@@ -1,0 +1,78 @@
+{
+  "planPath": "docs/superpowers/plans/2026-08-02-foundrykit-foundation.md",
+  "specPath": "docs/superpowers/specs/2026-08-02-foundrykit-design.md",
+  "planNumber": 1,
+  "planCount": 5,
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 0: Repository scaffolding and test harness",
+      "status": "pending",
+      "description": "**Goal:** A runnable, green test harness plus a syntax probe proving every Foundry Script feature this plan depends on works before anything is built on it.\n\n**Files:**\n- Create: .gitignore, Taskfile.yml, .pre-commit-config.yaml, addons/FoundryKit/plugin.cfg, test_project/packages.toml, test_project/project.foundry, test_project/icon.svg, scripts/test-foundrylib\n- Test: test_project/tests/syntax-probe.test.fs\n\n**Verify:** task test:foundrylib -> exits 0, 7 passing tests in SyntaxProbeTests\n\n**CRITICAL:** If a probe test fails to COMPILE, stop — the core design depends on that feature and must be revised before Task 1.\n\n```json:metadata\n{\"files\": [\".gitignore\", \"Taskfile.yml\", \".pre-commit-config.yaml\", \"addons/FoundryKit/plugin.cfg\", \"test_project/packages.toml\", \"test_project/project.foundry\", \"test_project/icon.svg\", \"scripts/test-foundrylib\", \"test_project/tests/syntax-probe.test.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"task test:foundrylib exits 0\", \"syntax probe covers all depended-on language features\", \"installed packages gitignored\"]}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 1: Platform detection",
+      "status": "pending",
+      "blockedBy": [0],
+      "description": "**Goal:** PlatformKind enum and Platform helper mapping OS.get_name() onto it.\n\n**Files:**\n- Create: addons/FoundryKit/core/PlatformKind.fs, addons/FoundryKit/core/Platform.fs\n- Test: test_project/tests/platform.test.fs\n\n**Verify:** task test:foundrylib -> 8 tests in PlatformTests pass\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/core/PlatformKind.fs\", \"addons/FoundryKit/core/Platform.fs\", \"test_project/tests/platform.test.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"all AK OS names map\", \"unknown maps to UNKNOWN\", \"current matches host\", \"is_apple only IOS/MACOS\"]}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "Task 2: Leveled logger",
+      "status": "pending",
+      "blockedBy": [0],
+      "description": "**Goal:** FoundryKitLog — per-instance leveled logger with named children, so three dynamically loaded frameworks never contend on a shared static logging flag.\n\n**Files:**\n- Create: addons/FoundryKit/core/FoundryKitLog.fs\n- Test: test_project/tests/log.test.fs\n\n**Verify:** task test:foundrylib -> 8 tests in FoundryKitLogTests pass\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/core/FoundryKitLog.fs\", \"test_project/tests/log.test.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"per-instance level\", \"dotted child prefix\", \"child inherits level\", \"below-level suppressed\"]}\n```"
+    },
+    {
+      "id": 3,
+      "subject": "Task 3: Native outcome union",
+      "status": "pending",
+      "blockedBy": [0],
+      "description": "**Goal:** NativeOutcome — the single untyped outcome shape core speaks.\n\n**Files:**\n- Create: addons/FoundryKit/core/NativeOutcome.fs\n- Test: test_project/tests/native-outcome.test.fs\n\n**Verify:** task test:foundrylib -> 6 tests in NativeOutcomeTests pass\n\n**Note:** Abandoned is a spec refinement — a native sheet dismissed with no native emission, distinct from TimedOut.\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/core/NativeOutcome.fs\", \"test_project/tests/native-outcome.test.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"five cases construct and match\", \"exhaustive without wildcard\", \"Succeeded carries typed dictionary\"]}\n```"
+    },
+    {
+      "id": 4,
+      "subject": "Task 4: Native bridge",
+      "status": "pending",
+      "blockedBy": [2],
+      "description": "**Goal:** NativeBridge — guarded ClassDB probing and instantiation, so a missing subsystem binary yields null rather than a crash.\n\n**Files:**\n- Create: addons/FoundryKit/core/NativeBridge.fs\n- Test: test_project/tests/native-bridge.test.fs\n\n**Verify:** task test:foundrylib -> 7 tests in NativeBridgeTests pass\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/core/NativeBridge.fs\", \"test_project/tests/native-bridge.test.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"unregistered unavailable\", \"null on instantiate missing\", \"instance for registered\", \"abstract treated unavailable\", \"empty name unavailable\"]}\n```"
+    },
+    {
+      "id": 5,
+      "subject": "Task 5: Async signal bridge",
+      "status": "pending",
+      "blockedBy": [2, 3],
+      "description": "**Goal:** NativeRequest — converts a signal-based native call into an async function returning NativeOutcome, with a watchdog timeout.\n\n**Files:**\n- Create: addons/FoundryKit/core/NativeRequest.fs, test_project/tests/support/fake_native.notest.fs\n- Test: test_project/tests/native-request.test.fs\n\n**Verify:** task test:foundrylib -> 7 tests in NativeRequestTests pass\n\n**If the timeout test hangs:** the headless runner has no SceneTree main loop — gate timeout tests behind a SceneTree null check rather than deleting them.\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/core/NativeRequest.fs\", \"test_project/tests/support/fake_native.notest.fs\", \"test_project/tests/native-request.test.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"success zips named payload\", \"failure reads code and message\", \"timeout resolves TimedOut\", \"settles once\", \"connections released\", \"missing fields omitted\"]}\n```"
+    },
+    {
+      "id": 6,
+      "subject": "Task 6: Request guard",
+      "status": "pending",
+      "blockedBy": [2],
+      "description": "**Goal:** RequestGuard — single-flight gating plus foreground-recovery detection, generalizing logic that exists only in AuthenticationKit today.\n\n**Files:**\n- Create: addons/FoundryKit/core/RequestGuard.fs\n- Test: test_project/tests/request-guard.test.fs\n\n**Verify:** task test:foundrylib -> 9 tests in RequestGuardTests pass\n\n**If inline lambda syntax is unavailable:** replace the two lambda signal connections in the test with a counter method on the test class.\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/core/RequestGuard.fs\", \"test_project/tests/request-guard.test.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"single-flight enforced\", \"end releases gate\", \"backgrounding tracked\", \"recovery_due after grace\", \"no emission without active request\"]}\n```"
+    },
+    {
+      "id": 7,
+      "subject": "Task 7: Backend factory trait",
+      "status": "pending",
+      "blockedBy": [1],
+      "description": "**Goal:** BackendFactory[TBackend] — the generic trait replacing three copies of an OS-name match chain.\n\n**Files:**\n- Create: addons/FoundryKit/core/BackendFactory.fs, test_project/tests/support/fake_backends.notest.fs\n- Test: test_project/tests/backend-factory.test.fs\n\n**Verify:** task test:foundrylib -> 7 tests in BackendFactoryTests pass\n\n**Two fallbacks:** (a) if one .fs file cannot declare multiple class_name types, split fake_backends into one type per file in the same namespace; (b) if a trait cannot carry concrete method bodies alongside abstract requirements, move resolve/resolve_current into a BackendResolver static helper taking the factory as a parameter.\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/core/BackendFactory.fs\", \"test_project/tests/support/fake_backends.notest.fs\", \"test_project/tests/backend-factory.test.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"generic trait satisfiable\", \"platform backend resolved\", \"null fallback on null\", \"UNKNOWN resolves null\"]}\n```"
+    },
+    {
+      "id": 8,
+      "subject": "Task 8: FoundryKit autoload facade",
+      "status": "pending",
+      "blockedBy": [1, 2, 6],
+      "description": "**Goal:** The @autoload facade owning the root logger, platform reporting, and application lifecycle fan-out to registered guards.\n\n**Files:**\n- Create: addons/FoundryKit/FoundryKit.fs\n- Modify: test_project/project.foundry (add [autoload] section)\n- Test: test_project/tests/foundry-kit.test.fs\n\n**Verify:** task test:foundrylib -> 7 tests in FoundryKitTests pass\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/FoundryKit.fs\", \"test_project/project.foundry\", \"test_project/tests/foundry-kit.test.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"autoload registered\", \"debug logging toggles level\", \"guards receive lifecycle\", \"unregistered receive nothing\", \"duplicate registration idempotent\"]}\n```"
+    },
+    {
+      "id": 9,
+      "subject": "Task 9: Boundary enforcement and CI",
+      "status": "pending",
+      "blockedBy": [4, 5, 7, 8],
+      "description": "**Goal:** Make the architectural rules mechanical — import boundaries and structural contracts checked by scripts, wired into a PR workflow.\n\n**Files:**\n- Create: scripts/test-import-boundaries, scripts/test-foundry-script-strict, .github/workflows/pr-check.yml\n\n**Verify:** task test:scripts -> exits 0; seeding a violation makes it exit 1\n\n**Note:** the foundry.testlib suite is not in CI — it needs a Foundry engine binary with no published runner image. Deferred to the release plan; until then task test:foundrylib is a required local pre-merge step.\n\n```json:metadata\n{\"files\": [\"scripts/test-import-boundaries\", \"scripts/test-foundry-script-strict\", \".github/workflows/pr-check.yml\"], \"verifyCommand\": \"task test:scripts\", \"acceptanceCriteria\": [\"core-imports-subsystem rejected\", \"cross-subsystem import rejected\", \"internal import from non-internal rejected\", \"passes clean tree\", \"seeded violation exits 1\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-08-02"
+}

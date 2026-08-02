@@ -177,8 +177,14 @@ enum_name NativeOutcome:
 	Succeeded(payload: Dictionary[String, Variant])
 	Failed(code: int, message: String)
 	TimedOut(elapsed_seconds: float)
+	Abandoned
 	Unavailable(missing_class: String)
 ```
+
+`Abandoned` covers a native sheet dismissed without the native emitting anything — the
+case AuthenticationKit's foreground-recovery logic exists to catch. It is distinct from
+`TimedOut`: it is detectable within the grace period after the app regains focus, rather
+than after the full watchdog timeout. Subsystems map it to their own `Cancelled`.
 
 Core stops at `NativeOutcome`. Each subsystem maps it into its own typed union; that
 mapping is the only place `Dictionary[String, Variant]` appears, and it never reaches
