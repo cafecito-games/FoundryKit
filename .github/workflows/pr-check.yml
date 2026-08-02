@@ -1,0 +1,82 @@
+name: PR Check
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  # The engine the suite is verified against. Local development may use a build from
+  # source; this pin is what CI guarantees. Bumping it is a deliberate, reviewable change.
+  FOUNDRY_VERSION: v0.1.0-alpha.19
+
+jobs:
+  foundrylib:
+    name: Foundry Script suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache Foundry engine
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/foundry-bin
+          key: foundry-${{ env.FOUNDRY_VERSION }}
+
+      - name: Download Foundry engine
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.cache/foundry-bin
+          if [ ! -x ~/.cache/foundry-bin/foundry ]; then
+            gh release download "$FOUNDRY_VERSION" \
+              --repo cafecito-games/Foundry \
+              --pattern '*_linux.x86_64.zip' \
+              --output /tmp/foundry.zip
+            unzip -j -o /tmp/foundry.zip -d /tmp/foundry-extract
+            # The archive's executable name carries the version, so resolve it rather
+            # than hard-coding it across engine bumps.
+            binary=$(find /tmp/foundry-extract -maxdepth 1 -type f -name '*x86_64*' | head -1)
+            [ -n "$binary" ] || { echo "no linux binary found in archive" >&2; ls -la /tmp/foundry-extract >&2; exit 1; }
+            mv "$binary" ~/.cache/foundry-bin/foundry
+            chmod +x ~/.cache/foundry-bin/foundry
+          fi
+          ~/.cache/foundry-bin/foundry --version
+
+      - name: Install anvil
+        run: go install github.com/cafecito-games/foundry-tools/cmd/anvil@latest
+
+      - name: Run Foundry Script suite
+        env:
+          FOUNDRY_BIN: /home/runner/.cache/foundry-bin/foundry
+        run: |
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          task test:foundrylib
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install prek
+        run: pip install prek
+
+      - name: Run linters
+        run: prek run --all-files
