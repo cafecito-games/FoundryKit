@@ -54,11 +54,13 @@ Verified against `Foundry/modules/foundry_script/GRAMMAR.md`:
   base declared in a different file, even when both files share a namespace and the
   child carries an explicit self-import; the engine reports
   `Could not find base class "<Base>"`. The path-form (`extends "res://path/to/base.fs"`)
-  resolves correctly across files and the child inherits the base's members, reproduced
-  with `ProbePathChild extends "res://tests/support/probe_path_base.notest.fs"` in
-  `test_project/tests/`. The legacy AuthenticationKit `foundry-migration` branch relies on
-  exactly this in production — its four platform backends (`AuthenticationKitBackendApple`
-  and siblings) each `extends` one abstract base by `res://` path across files.
+  resolves correctly across files and the child inherits the base's members — reproduced
+  with a temporary `ProbePathChild extends "res://tests/support/probe_path_base.notest.fs"`
+  probe under `test_project/tests/`, deleted after verification; the probe commands and
+  raw output are recorded on the PR that introduced this correction (issue #21). The
+  legacy AuthenticationKit `foundry-migration` branch relies on exactly this in
+  production — its four platform backends (`AuthenticationKitBackendApple` and siblings)
+  each `extends` one abstract base by `res://` path across files.
   Path-form `extends` therefore *can* express a shared class-based contract across files.
   This design still prescribes `trait_name` composed with `uses` for subsystem backend
   contracts, but on design grounds rather than a language limitation: composition avoids

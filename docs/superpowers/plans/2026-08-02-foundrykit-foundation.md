@@ -1270,7 +1270,9 @@ its own nine acceptance tests did not catch, all found by Codex review and fixed
 `main` (issue #8 / PR #23):
 
 1. A stale grace timer could abandon a *later, unrelated* request — fixed with a
-   request-generation token (`_request_generation`, bumped on every `begin()`/`end()`).
+   request-generation token (`_request_generation`, bumped when `begin()` successfully
+   claims the gate and when `end()` releases it; a rejected `begin()` while a request is
+   already active does not bump it).
 2. A pending grace timer survived a *second* focus loss — fixed with a focus-generation
    token (`_focus_generation`, bumped on every `notify_focus_lost()`); the timer callback
    checks both tokens still match before emitting `recovery_due`.
@@ -1281,18 +1283,18 @@ its own nine acceptance tests did not catch, all found by Codex review and fixed
 Read `addons/FoundryKit/core/RequestGuard.fs` and `test_project/tests/request-guard.test.fs`
 on `main` before implementing this task; do not reproduce the original nine-test,
 race-prone version documented in earlier drafts of this plan. The shipped test file adds
-four regression tests beyond the original nine:
+three regression tests beyond the original nine —
 `test_stale_grace_timer_does_not_abandon_a_later_request`,
-`test_focus_loss_before_grace_elapses_cancels_the_pending_recovery`,
-`test_repeated_focus_gained_notifications_emit_recovery_due_once`, and a counter-based
-`_on_recovery_due` helper replacing the two inline lambda connections the original test
-file used.
+`test_focus_loss_before_grace_elapses_cancels_the_pending_recovery`, and
+`test_repeated_focus_gained_notifications_emit_recovery_due_once` — for 12 tests total,
+plus a counter-based `_on_recovery_due` helper method replacing the two inline lambda
+connections the original test file used.
 
 **Steps:**
 
 - [ ] **Step 1: Write the failing test**
 
-Copy `test_project/tests/request-guard.test.fs` from `main` (13 tests covering the gate,
+Copy `test_project/tests/request-guard.test.fs` from `main` (12 tests covering the gate,
 focus tracking, and the three timer races above).
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1310,7 +1312,7 @@ token protects.
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `task test:foundrylib`
-Expected: PASS — 13 tests in `RequestGuardTests`.
+Expected: PASS — 12 tests in `RequestGuardTests`.
 
 - [ ] **Step 5: Commit**
 
