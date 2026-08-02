@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+addon="$repo_root/addons/FoundryKit"
+status=0
+
+fail() {
+    echo "FAIL: $*" >&2
+    status=1
+}
+
+command -v rg >/dev/null 2>&1 || { echo "ERROR: ripgrep (rg) is required" >&2; exit 2; }
+
+subsystems=(auth purchase mobile)
+
+# Core must not know about any subsystem.
+if [ -d "$addon/core" ]; then
+    for subsystem in "${subsystems[@]}"; do
+        while IFS= read -r hit; do
+            [ -n "$hit" ] || continue
+            fail "core/ imports subsystem namespace '$subsystem': $hit"
+        done < <(rg -l "^import games\.cafecito\.foundrykit\.${subsystem}\b" "$addon/core" || true)
+    done
+fi
+
+# No subsystem may import another subsystem.
+for subsystem in "${subsystems[@]}"; do
+    [ -d "$addon/$subsystem" ] || continue
+    for other in "${subsystems[@]}"; do
+        [ "$subsystem" = "$other" ] && continue
+        while IFS= read -r hit; do
+            [ -n "$hit" ] || continue
+            fail "subsystem '$subsystem' imports subsystem '$other': $hit"
+        done < <(rg -l "^import games\.cafecito\.foundrykit\.${other}\b" "$addon/$subsystem" || true)
+    done
+done
+
+# Only files under an internal/ directory may import an internal namespace.
+while IFS= read -r hit; do
+    [ -n "$hit" ] || continue
+    case "$hit" in
+        */internal/*) ;;
+        *) fail "non-internal file imports an internal namespace: $hit" ;;
+    esac
+done < <(rg -l "^import games\.cafecito\.foundrykit\.[a-z]+\.internal\b" "$addon" || true)
+
+if [ "$status" -eq 0 ]; then
+    echo "PASS: import boundaries hold"
+fi
+
+exit "$status"

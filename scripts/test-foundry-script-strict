@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+addon="$repo_root/addons/FoundryKit"
+
+fail() {
+    echo "FAIL: $*" >&2
+    exit 1
+}
+
+assert_contains() {
+    local file=$1
+    local pattern=$2
+    local message=$3
+    rg -q "$pattern" "$file" || fail "$message"
+}
+
+command -v rg >/dev/null 2>&1 || { echo "ERROR: ripgrep (rg) is required" >&2; exit 2; }
+
+facade="$addon/FoundryKit.fs"
+[[ -f "$facade" ]] || fail "FoundryKit.fs must define the autoload facade"
+
+assert_contains "$facade" '^@autoload$' \
+    "FoundryKit.fs must register itself as the FoundryKit autoload"
+assert_contains "$facade" '^namespace games\.cafecito\.foundrykit$' \
+    "FoundryKit.fs must use the root FoundryKit namespace"
+assert_contains "$facade" '^class_name FoundryKit extends Node$' \
+    "FoundryKit.fs must be a globally named Node autoload"
+
+for core_file in PlatformKind Platform LogLevel FoundryKitLog NativeOutcome NativeBridge \
+                 NativeRequest RequestGuard BackendFactory
+do
+    path="$addon/core/${core_file}.fs"
+    [[ -f "$path" ]] || fail "core/${core_file}.fs is missing"
+    assert_contains "$path" '^namespace games\.cafecito\.foundrykit\.core$' \
+        "core/${core_file}.fs must use the core namespace"
+done
+
+# Error unions must be matched exhaustively; a wildcard branch defeats the checking that
+# makes the union redesign safe.
+while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    fail "core file uses a wildcard match branch over an outcome union: $path"
+done < <(rg -l '^\s+NativeOutcome\._:' "$addon" || true)
+
+echo "PASS: Foundry Script structure checks hold"
