@@ -45,6 +45,12 @@ fi
 
 status=0
 
+# A .foundryextension comments with ";". Everything below reads configuration only, so a
+# commented-out dependency reads as absent — which is what the engine sees.
+uncommented() {
+    sed 's/;.*//' "$1"
+}
+
 fail() {
     echo "FAIL: $*" >&2
     status=1
@@ -72,7 +78,7 @@ name_pattern="${resolution_glob//\*/[A-Za-z0-9]+}"
 extensions=()
 while IFS= read -r extension; do
     [ -n "$extension" ] || continue
-    grep -qE 'FoundryKitCore\.(xc)?framework' "$extension" || continue
+    uncommented "$extension" | grep -qE 'FoundryKitCore\.(xc)?framework' || continue
     extensions+=("$extension")
 done < <(find "$addon" -maxdepth 1 -name '*.foundryextension' | sort)
 
@@ -92,7 +98,8 @@ for extension in "${extensions[@]}"; do
     while IFS= read -r base; do
         [ -n "$base" ] || continue
         names+=("$base")
-    done < <(grep -oE '[^"/]*_PackageProduct[^"/]*\.(xc)?framework' "$extension" |
+    done < <(uncommented "$extension" |
+        grep -oE '[^"/]*_PackageProduct[^"/]*\.(xc)?framework' |
         sed -e 's/\.xcframework$//' -e 's/\.framework$//' | sort -u)
 
     if [ "${#names[@]}" -ne 1 ]; then
@@ -148,7 +155,7 @@ for extension in "${extensions[@]}"; do
                 platform=""
                 ;;
         esac
-    done < <(sed -n '/^\[dependencies\]/,/^\[/p' "$extension")
+    done < <(uncommented "$extension" | sed -n '/^\[dependencies\]/,/^\[/p')
 
     if [ -n "$platform" ]; then
         fail "$relative has an unterminated dependency block for '$platform'"
