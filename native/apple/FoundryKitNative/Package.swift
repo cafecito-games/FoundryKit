@@ -18,6 +18,7 @@ let package = Package(
             url: "https://github.com/cafecito-games/Foundry-Swift-Binary.git",
             exact: "0.1.0-alpha.2"
         ),
+        .package(url: "https://github.com/google/GoogleSignIn-iOS", exact: "9.1.0"),
     ],
     targets: [
         .target(
@@ -32,12 +33,18 @@ let package = Package(
             dependencies: [
                 "FoundryKitCore",
                 .product(name: "FoundrySwift", package: "Foundry-Swift-Binary"),
+                .product(name: "GoogleSignIn", package: "GoogleSignIn-iOS"),
             ],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
             name: "FoundryKitCoreTests",
             dependencies: ["FoundryKitCore"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "FoundryKitAuthTests",
+            dependencies: ["FoundryKitAuth"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]
