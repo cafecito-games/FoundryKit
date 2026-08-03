@@ -595,15 +595,40 @@ func test_configuring_another_provider_does_not_clear_the_google_audience() -> v
 
 # --- The backend the session belongs to ---------------------------------------------------
 
-func test_configuring_a_backend_for_the_first_time_keeps_the_session() -> void:
-	# There is no previous origin to have issued the held session against, so nothing about
-	# it is invalidated by naming one.
+func test_configuring_a_backend_after_a_restore_ends_the_restored_session() -> void:
+	# Secure storage does not record which backend issued what it holds, so a session restored
+	# before any origin was named cannot be shown to belong to the one named afterwards. The
+	# alternative to dropping it is presenting stored tokens to a backend that may never have
+	# issued them, so a game configures the backend before it restores.
 	var subsystem: AuthSubsystem = AuthSubsystem.new(
 			_log, _transport, BackendConfig.new(), _backend)
 	_backend.restore_result = SessionResult.Success(_session("access-one", _REFRESH_TOKEN))
 	await subsystem.restore_session()
-	subsystem.configure_backend(BackendConfig.new("https://api.example.com"))
 	Expect.that(subsystem.has_session()).to_be_true()
+	subsystem.configure_backend(BackendConfig.new("https://api.example.com"))
+	Expect.that(subsystem.has_session()).to_be_false()
+
+func test_a_trailing_slash_on_the_same_origin_keeps_the_session() -> void:
+	# url_for collapses the doubled separator, so both forms address every path identically.
+	# Signing a player out over punctuation would be a defect, not caution.
+	await _install_session("access-one", _REFRESH_TOKEN)
+	_subsystem.configure_backend(BackendConfig.new("https://api.example.com/"))
+	Expect.that(_subsystem.has_session()).to_be_true()
+	Expect.that(_subsystem.access_token()).to_equal("access-one")
+
+func test_a_credential_is_not_exchanged_at_a_backend_moved_while_the_sheet_was_open() -> void:
+	# The player is in front of the native sheet when the game moves the backend. The
+	# credential the sheet produces was obtained for the backend the sign-in began against;
+	# posting it to the replacement discloses it to a service the player never authorized,
+	# and unlike every other guard here that cannot be undone after the fact.
+	_backend.credential_result = CredentialResult.Success(_google_credential())
+	_backend.suspends = true
+	var pending: Coroutine[SessionResult] = _subsystem.sign_in(Provider.GOOGLE)
+	_subsystem.configure_backend(BackendConfig.new("https://other.example.com"))
+	_backend.release()
+	Expect.that(_describe_session(await pending)).to_equal("fail:cancelled")
+	Expect.that(_transport.send_count).to_equal(0)
+	Expect.that(_subsystem.has_session()).to_be_false()
 
 func test_correcting_a_path_on_the_same_origin_keeps_the_session() -> void:
 	await _install_session("access-one", _REFRESH_TOKEN)
