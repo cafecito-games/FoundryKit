@@ -11,4 +11,5 @@ addons/FoundryKit/bin/**/*.xcframework
 addons/FoundryKit/bin/**/*.framework
 addons/FoundryKit/bin/**/*.aar
 addons/FoundryKit/bin/**/*.bundle
+native/apple/FoundryKitNative/*.xcodeproj/
 *.log

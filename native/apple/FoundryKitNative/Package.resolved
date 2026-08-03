@@ -1,0 +1,15 @@
+{
+  "originHash" : "0c29b70105eaa21f6e7abfc67022d5bf4138e8873c52ad1c404cb2164b426e62",
+  "pins" : [
+    {
+      "identity" : "foundry-swift-binary",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/cafecito-games/Foundry-Swift-Binary.git",
+      "state" : {
+        "revision" : "ba20d76029ef31057ee5af62bfee82c16fca13c7",
+        "version" : "0.1.0-alpha.2"
+      }
+    }
+  ],
+  "version" : 3
+}
