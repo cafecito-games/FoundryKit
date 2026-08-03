@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
-# Builds the Apple auth extension binary and the shared core framework.
+# Builds the Apple auth extension binary and the shared frameworks it loads against.
 #
-# Output:
-#   addons/FoundryKit/bin/auth/FoundryKitAuth.xcframework  (iOS device + simulator + macOS)
-#   addons/FoundryKit/bin/core/FoundryKitCore.framework    (macOS, shared dependency)
+# Output under addons/FoundryKit/bin/, all of it gitignored release artefacts:
 #
-# Both are release artefacts, not source, and are gitignored.
+#   auth/FoundryKitAuth.xcframework   iOS device + iOS simulator + macOS
+#   core/FoundryKitCore.framework     macOS — what the editor loads
+#   core/FoundryKitCore.xcframework   the same three slices, for app export
+#   core/FoundrySwift_*_PackageProduct.xcframework
+#
+# The last one is not ours. Xcode wraps the FoundrySwift *package product* in a generated
+# framework because that product bundles the FoundrySwift xcframework together with the
+# FoundryExtensionC C target, and both FoundryKitCore and FoundryKitAuth link the wrapper
+# rather than FoundrySwift.framework directly. Shipping FoundrySwift.framework alone does
+# not satisfy that load command, so the wrapper travels with the frameworks that need it.
+# Restructuring the upstream product would remove it — tracked as #81.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -20,28 +28,50 @@ apple_require_tools
 apple_generate_project "$package_dir"
 apple_prepare_packages "$package_dir" "$derived_data" FoundryKitAuth_macOS
 
+# Each scheme builds its platform's FoundryKitCore too, as a target dependency.
 apple_build FoundryKitAuth_iOS "generic/platform=iOS"
 apple_build FoundryKitAuth_iOS "generic/platform=iOS Simulator" CODE_SIGNING_ALLOWED=NO
 apple_build FoundryKitAuth_macOS "generic/platform=macOS"
 
 products="$derived_data/Build/Products"
-for framework in \
-	"$products/Release-iphoneos/FoundryKitAuth.framework" \
-	"$products/Release-iphonesimulator/FoundryKitAuth.framework" \
-	"$products/Release/FoundryKitAuth.framework" \
-	"$products/Release/FoundryKitCore.framework"; do
-	[[ -d "$framework" ]] || apple_fail "expected build product is missing: $framework"
-done
+platform_directories=(Release-iphoneos Release-iphonesimulator Release)
+
+# The wrapper's name carries a hash of the package product's identity, so resolve it
+# rather than writing it down. It is stable for a pinned dependency version, but nothing
+# here should break when that version moves.
+package_product=$(
+	cd "$products/Release/PackageFrameworks" &&
+		find . -maxdepth 1 -name 'FoundrySwift_*_PackageProduct.framework' -exec basename {} .framework \;
+)
+[[ -n "$package_product" ]] ||
+	apple_fail "no FoundrySwift package-product framework in $products/Release/PackageFrameworks"
+
+# Packs one framework's per-platform slices into an xcframework, failing on the first
+# slice xcodebuild did not produce rather than emitting a partial artefact.
+create_xcframework() {
+	local framework=$1
+	local output=$2
+	local subdirectory=${3:-}
+	local arguments=()
+	local platform_directory path
+
+	for platform_directory in "${platform_directories[@]}"; do
+		path="$products/$platform_directory${subdirectory:+/$subdirectory}/$framework.framework"
+		[[ -d "$path" ]] || apple_fail "expected build product is missing: $path"
+		arguments+=(-framework "$path")
+	done
+
+	rm -rf "$output"
+	xcodebuild -create-xcframework "${arguments[@]}" -output "$output"
+}
 
 mkdir -p "$auth_bin" "$core_bin"
-rm -rf "$auth_bin/FoundryKitAuth.xcframework" "$core_bin/FoundryKitCore.framework"
 
-xcodebuild -create-xcframework \
-	-framework "$products/Release-iphoneos/FoundryKitAuth.framework" \
-	-framework "$products/Release-iphonesimulator/FoundryKitAuth.framework" \
-	-framework "$products/Release/FoundryKitAuth.framework" \
-	-output "$auth_bin/FoundryKitAuth.xcframework"
+create_xcframework FoundryKitAuth "$auth_bin/FoundryKitAuth.xcframework"
+create_xcframework FoundryKitCore "$core_bin/FoundryKitCore.xcframework"
+create_xcframework "$package_product" "$core_bin/$package_product.xcframework" PackageFrameworks
 
+rm -rf "$core_bin/FoundryKitCore.framework"
 cp -R "$products/Release/FoundryKitCore.framework" "$core_bin/FoundryKitCore.framework"
 
-echo "PASS: built FoundryKitAuth.xcframework and FoundryKitCore.framework"
+echo "PASS: built FoundryKitAuth.xcframework and the shared core frameworks"

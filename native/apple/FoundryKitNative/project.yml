@@ -27,15 +27,23 @@ targets:
         CURRENT_PROJECT_VERSION: 1
         MARKETING_VERSION: "1.0.0"
         # The install layout is addons/FoundryKit/bin/<subsystem>/<Name>.framework, with
-        # FoundryKitCore.framework beside it in bin/core/ and FoundrySwift.framework in
-        # the conventional addons/FoundrySwift/bin/macos_arm64/.
+        # FoundryKitCore.framework in bin/core/ beside the FoundrySwift package-product
+        # wrapper, and FoundrySwift.framework in addons/FoundrySwift/bin/macos_arm64/.
         #
-        # @loader_path is the directory holding the loaded binary, which differs by
+        # @loader_path is the directory holding the loaded binary, and that differs by
         # bundle shape: a shallow iOS framework puts it at <Name>.framework, a versioned
-        # macOS framework at <Name>.framework/Versions/A. Both shapes are covered, one
-        # level apart, because the same setting builds both platforms. An entry that does
-        # not resolve is skipped by dyld, so the unused shape costs nothing.
-        LD_RUNPATH_SEARCH_PATHS: "@executable_path/Frameworks @loader_path/../ @loader_path/../../ @loader_path/../../core @loader_path/../../../core @loader_path/../../../../FoundrySwift/bin/macos_arm64 @loader_path/../../../../../FoundrySwift/bin/macos_arm64"
+        # macOS framework two levels deeper at <Name>.framework/Versions/A. Each
+        # destination therefore needs two entries. Counting from a framework in
+        # bin/<subsystem>/, which is where every FoundryKit binary lives:
+        #
+        #   shape      to bin/                to addons/
+        #   shallow    @loader_path/../..     @loader_path/../../../..
+        #   versioned  @loader_path/../../../../   @loader_path/../../../../../..
+        #
+        # An entry that does not resolve is skipped by dyld, so the shape that does not
+        # apply costs nothing. @executable_path/Frameworks covers the iOS case where the
+        # frameworks are embedded in the host .app instead.
+        LD_RUNPATH_SEARCH_PATHS: "@executable_path/Frameworks @loader_path/../../core @loader_path/../../../../core @loader_path/../../../../FoundrySwift/bin/macos_arm64 @loader_path/../../../../../../FoundrySwift/bin/macos_arm64"
         # Foundry-Swift-Binary 0.1.0-alpha.2 has two packaging defects that make these
         # flags mandatory; both are tracked upstream as FoundryKit#81.
         #
