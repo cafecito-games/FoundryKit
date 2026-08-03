@@ -1,0 +1,56 @@
+; The auth subsystem's native binary. One extension file per subsystem, so a consumer
+; that deletes addons/FoundryKit/bin/auth/ loses only auth's native backend.
+;
+; macos.arm64 names the macOS slice *inside* the xcframework rather than the xcframework
+; itself. The engine dlopen()s the library path as given (OS_MacOS::open_dynamic_library),
+; and an .xcframework directory is not a loadable bundle — NSBundle finds no executable in
+; it and dlopen reports "not a file". The slice inside it is an ordinary framework and
+; loads; its @rpath entries reach bin/core/ from that depth.
+;
+; Both entries under [dependencies] are required at load time, verified by removing each
+; and watching dyld fail:
+;
+;   FoundryKitCore                          the shared subsystem library
+;   FoundrySwift_<hash>_PackageProduct      Xcode's wrapper around the FoundrySwift
+;                                           package product, which both frameworks link
+;                                           by @rpath instead of FoundrySwift.framework
+;
+; FoundrySwift.framework itself closes the chain, but it belongs to the FoundrySwift
+; addon, not to FoundryKit, and is left to that addon's own extension file to ship.
+;
+; The wrapper's name carries a hash of the package product's identity. It is stable for a
+; pinned Foundry-Swift-Binary version and changes when that pin moves; `task apple:auth`
+; prints the name it published.
+
+[configuration]
+entry_symbol = "foundry_kit_auth_entry_point"
+compatibility_minimum = "0.1.0"
+
+[libraries]
+ios.debug             = "res://addons/FoundryKit/bin/auth/FoundryKitAuth.xcframework"
+ios.release           = "res://addons/FoundryKit/bin/auth/FoundryKitAuth.xcframework"
+ios.simulator.debug   = "res://addons/FoundryKit/bin/auth/FoundryKitAuth.xcframework"
+ios.simulator.release = "res://addons/FoundryKit/bin/auth/FoundryKitAuth.xcframework"
+macos.arm64           = "res://addons/FoundryKit/bin/auth/FoundryKitAuth.xcframework/macos-arm64/FoundryKitAuth.framework"
+
+[dependencies]
+ios.debug = {
+"res://addons/FoundryKit/bin/core/FoundryKitCore.xcframework": "",
+"res://addons/FoundryKit/bin/core/FoundrySwift_4AFE704CD7182800_PackageProduct.xcframework": ""
+}
+ios.release = {
+"res://addons/FoundryKit/bin/core/FoundryKitCore.xcframework": "",
+"res://addons/FoundryKit/bin/core/FoundrySwift_4AFE704CD7182800_PackageProduct.xcframework": ""
+}
+ios.simulator.debug = {
+"res://addons/FoundryKit/bin/core/FoundryKitCore.xcframework": "",
+"res://addons/FoundryKit/bin/core/FoundrySwift_4AFE704CD7182800_PackageProduct.xcframework": ""
+}
+ios.simulator.release = {
+"res://addons/FoundryKit/bin/core/FoundryKitCore.xcframework": "",
+"res://addons/FoundryKit/bin/core/FoundrySwift_4AFE704CD7182800_PackageProduct.xcframework": ""
+}
+macos.arm64 = {
+"res://addons/FoundryKit/bin/core/FoundryKitCore.framework": "",
+"res://addons/FoundryKit/bin/core/FoundrySwift_4AFE704CD7182800_PackageProduct.framework": ""
+}
