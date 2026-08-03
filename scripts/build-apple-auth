@@ -3,10 +3,12 @@
 #
 # Output under addons/FoundryKit/bin/, all of it gitignored release artefacts:
 #
-#   auth/FoundryKitAuth.xcframework   iOS device + iOS simulator + macOS
-#   core/FoundryKitCore.framework     macOS — what the editor loads
-#   core/FoundryKitCore.xcframework   the same three slices, for app export
-#   core/FoundrySwift_*_PackageProduct.xcframework
+#   auth/FoundryKitAuth.xcframework                 iOS device + simulator + macOS
+#   core/FoundryKitCore.xcframework                 the same three slices
+#   core/FoundrySwift_*_PackageProduct.xcframework  likewise
+#   core/FoundryKitCore.framework                   macOS — what the editor loads
+#   core/FoundrySwift_*_PackageProduct.framework    macOS, beside the framework that
+#                                                   links it
 #
 # The last one is not ours. Xcode wraps the FoundrySwift *package product* in a generated
 # framework because that product bundles the FoundrySwift xcframework together with the
@@ -71,7 +73,14 @@ create_xcframework FoundryKitAuth "$auth_bin/FoundryKitAuth.xcframework"
 create_xcframework FoundryKitCore "$core_bin/FoundryKitCore.xcframework"
 create_xcframework "$package_product" "$core_bin/$package_product.xcframework" PackageFrameworks
 
-rm -rf "$core_bin/FoundryKitCore.framework"
+# The editor loads plain macOS frameworks, not xcframeworks, so the macOS slice of every
+# shared framework is also published flat in bin/core/. Both have to be here: the flat
+# FoundryKitCore.framework links the wrapper by @rpath, and its runpaths reach bin/core/,
+# not inside a sibling xcframework.
+for framework in FoundryKitCore "$package_product"; do
+	rm -rf "${core_bin:?}/$framework.framework"
+done
 cp -R "$products/Release/FoundryKitCore.framework" "$core_bin/FoundryKitCore.framework"
+cp -R "$products/Release/PackageFrameworks/$package_product.framework" "$core_bin/$package_product.framework"
 
 echo "PASS: built FoundryKitAuth.xcframework and the shared core frameworks"
