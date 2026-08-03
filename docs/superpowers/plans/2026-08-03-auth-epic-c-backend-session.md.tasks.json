@@ -1,0 +1,59 @@
+{
+  "planPath": "docs/superpowers/plans/2026-08-03-auth-epic-c-backend-session.md",
+  "tasks": [
+    {
+      "id": 1,
+      "subject": "Task 1: Distinguish an absent exp from exp: 0",
+      "status": "pending",
+      "description": "**Goal:** Make expiry detection unambiguous before anything depends on it. Closes #57.\n\n**Files:**\n- Modify: addons/FoundryKit/auth/internal/Jwt.fs\n- Modify: addons/FoundryKit/auth/AuthSession.fs\n- Modify: test_project/tests/auth-jwt.test.fs, test_project/tests/auth-session.test.fs\n\n**Acceptance Criteria:**\n- A token with no exp claim is distinguishable from one with exp: 0\n- is_expired_at treats a present exp: 0 as expired at any time\n- A token with no exp is still never-expiring (backend is the authority)\n- Opaque tokens behave as no-expiry, unchanged\n- Every pre-existing JwtTests and AuthSessionTests case passes unchanged\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/internal/Jwt.fs\", \"addons/FoundryKit/auth/AuthSession.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"absent exp distinguishable from exp: 0\", \"present exp: 0 is expired\", \"pre-existing cases unchanged\"]}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "Task 2: HttpOutcome - the core transport union",
+      "status": "pending",
+      "description": "**Goal:** One concrete union describing how an HTTP attempt ended, with no auth vocabulary.\n\n**Files:**\n- Create: addons/FoundryKit/core/HttpOutcome.fs\n- Create: test_project/tests/http-outcome.test.fs\n\n**Acceptance Criteria:**\n- Cases cover answered-with-status, transport failure, timeout\n- NO auth concepts; a 401 is just a status\n- Exhaustive match with no _ wildcard\n- core/ still references no subsystem\n\n**Verify:** task test:foundrylib && task test:scripts\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/core/HttpOutcome.fs\"], \"verifyCommand\": \"task test:foundrylib && task test:scripts\", \"acceptanceCriteria\": [\"no auth vocabulary in core\", \"exhaustive match without wildcard\", \"import boundaries still pass\"]}\n```"
+    },
+    {
+      "id": 3,
+      "subject": "Task 3: HttpClient - generic async transport",
+      "status": "pending",
+      "blockedBy": [2],
+      "description": "**Goal:** An awaitable HTTP call returning HttpOutcome, injectable so no test needs a network.\n\n**Files:**\n- Create: addons/FoundryKit/core/HttpTransport.fs, addons/FoundryKit/core/HttpClient.fs\n- Create: test_project/tests/support/fake_http_client.notest.fs, test_project/tests/http-client.test.fs\n\n**Acceptance Criteria:**\n- async send(method, url, headers, body, timeout) -> HttpOutcome\n- Backed by trait_name HttpTransport (the seam every later test uses)\n- No SceneTree does not hang forever\n- Instance stays alive across its own await (mirror NativeRequest's _in_flight registry)\n- core/ still references no subsystem\n\n**Verify:** task test:foundrylib && task test:scripts\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/core/HttpTransport.fs\", \"addons/FoundryKit/core/HttpClient.fs\", \"test_project/tests/support/fake_http_client.notest.fs\"], \"verifyCommand\": \"task test:foundrylib && task test:scripts\", \"acceptanceCriteria\": [\"transport trait exists as the test seam\", \"survives caller dropping its reference\", \"settles exactly once\"]}\n```"
+    },
+    {
+      "id": 4,
+      "subject": "Task 4: BackendConfig",
+      "status": "pending",
+      "description": "**Goal:** Describe where the backend is and which paths it exposes.\n\n**Files:**\n- Create: addons/FoundryKit/auth/BackendConfig.fs\n- Create: test_project/tests/auth-backend-config.test.fs\n\n**Acceptance Criteria:**\n- Base URL plus exchange/refresh/sign-out paths, each defaulted\n- Joins base and path without a double slash or a dropped one\n- An empty base URL is detectable so Configuration stays honest\n- ## doc comment on every public member\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/BackendConfig.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"url joining handles trailing/leading slashes\", \"unconfigured state detectable\"]}\n```"
+    },
+    {
+      "id": 5,
+      "subject": "Task 5: BackendClient - auth semantics over the transport",
+      "status": "pending",
+      "blockedBy": [3, 4],
+      "description": "**Goal:** The one place that knows a bearer token goes in a header and a 401 means the session is gone.\n\n**Files:**\n- Create: addons/FoundryKit/auth/internal/BackendClient.fs\n- Create: test_project/tests/auth-backend-client.test.fs\n\n**Acceptance Criteria:**\n- Injects Authorization: Bearer only when a non-empty token is supplied\n- Answered(2xx) -> ResponseResult.Success\n- Answered(401) -> AuthResponse with session_expired=true, NOT an error\n- Other non-2xx -> AuthError.RequestFailed(status, body)\n- TransportFailed -> RequestFailed(0, detail); TimedOut -> AuthError.TimedOut\n- NEVER logs the token, not even truncated\n- Exhaustive match, no _ wildcard\n\n**Verify:** task test:foundrylib && task test:scripts\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/internal/BackendClient.fs\"], \"verifyCommand\": \"task test:foundrylib && task test:scripts\", \"acceptanceCriteria\": [\"401 yields Success with session_expired, not Failure\", \"no header when token empty\", \"token never logged\"]}\n```"
+    },
+    {
+      "id": 6,
+      "subject": "Task 6: SessionStore - session authority and single-flight refresh",
+      "status": "pending",
+      "blockedBy": [1, 5],
+      "description": "**Goal:** Hold the active session and guarantee concurrent refreshes collapse into one.\n\n**Files:**\n- Create: addons/FoundryKit/auth/internal/SessionStore.fs\n- Create: test_project/tests/auth-session-store.test.fs\n\n**Acceptance Criteria:**\n- At most one active session; has_session/access_token/set_session/clear\n- refresh() is SINGLE-FLIGHT: N concurrent callers cause exactly ONE backend call, asserted by call count\n- A failed refresh clears the in-flight marker so a later refresh is attempted\n- A successful refresh replaces the session and reports rotation\n- No refresh token fails fast with SessionExpired, no backend call\n- No shared mutable static state\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/internal/SessionStore.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"three concurrent refreshes make one backend call\", \"failed refresh does not wedge the store\", \"no static mutable state\"]}\n```"
+    },
+    {
+      "id": 7,
+      "subject": "Task 7: Wire AuthSubsystem",
+      "status": "pending",
+      "blockedBy": [6],
+      "description": "**Goal:** Replace the four Configuration stubs with the real thing, and emit the two unsolicited signals.\n\n**Files:**\n- Modify: addons/FoundryKit/auth/AuthSubsystem.fs\n- Modify: test_project/tests/auth-subsystem.test.fs\n\n**Acceptance Criteria:**\n- _exchange posts the credential and returns SessionResult.Success\n- valid_access_token returns current when valid, refreshes when expired, fails SessionExpired otherwise\n- refresh_session delegates to SessionStore\n- request() injects the token; on 401 refreshes and retries EXACTLY ONCE (asserted by send_count)\n- tokens_refreshed and session_expired fire appropriately\n- With no BackendConfig, every path still reports Configuration exactly as today\n- The class doc comment is rewritten\n- An injection seam exists: AuthSubsystem._init takes optional transport and config, matching AppleAuthBackend.new(log, native_override)\n\n**Verify:** task test:foundrylib && task test:scripts && task lint\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/AuthSubsystem.fs\"], \"verifyCommand\": \"task test:foundrylib && task test:scripts && task lint\", \"acceptanceCriteria\": [\"401 retries exactly once, proven by call count\", \"second 401 is SessionExpired not a loop\", \"unconfigured path unchanged\", \"transport injection seam exists\"]}\n```"
+    },
+    {
+      "id": 8,
+      "subject": "Task 8: Configuration entry point and facade check",
+      "status": "pending",
+      "blockedBy": [7],
+      "description": "**Goal:** Let a consumer supply a BackendConfig, and confirm the public surface still matches AuthApi.\n\n**Files:**\n- Modify: addons/FoundryKit/auth/AuthApi.fs (only if configure_backend joins the trait)\n- Modify: addons/FoundryKit/auth/AuthSubsystem.fs\n- Modify: test_project/tests/auth-facade.test.fs, test_project/tests/foundry-kit.test.fs\n\n**Acceptance Criteria:**\n- A consumer can supply a BackendConfig through FoundryKit.auth\n- If configure_backend joins AuthApi, the single implementor is updated\n- FoundryKit.auth still resolves; facade test asserts the full surface\n- @autoload name shadowing handled: use preload if constructing in expression position\n\n**Verify:** task test:foundrylib && task test:scripts && task lint\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/AuthApi.fs\", \"addons/FoundryKit/auth/AuthSubsystem.fs\"], \"verifyCommand\": \"task test:foundrylib && task test:scripts && task lint\", \"acceptanceCriteria\": [\"consumer can configure the backend\", \"facade surface intact\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-08-03"
+}
