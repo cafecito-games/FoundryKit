@@ -70,16 +70,26 @@ func test_no_session_initially() -> void:
 	Expect.that(_auth.has_session()).to_be_false()
 	Expect.that(_auth.access_token()).to_equal("")
 
+## [enum Provider.APPLE] is unavailable on every production backend without a configure
+## call — [code]NullAuthBackend[/code] always, [code]AppleAuthBackend[/code] because there
+## is no native binary in the suite, and [code]DesktopAuthBackend[/code] because it serves
+## Google only. [enum Provider.GOOGLE] is not used here: [code]DesktopAuthBackend[/code]
+## reports it available with no configuration at all, and [member _auth] resolves to
+## whichever backend the host platform maps to — Apple on macOS, desktop OAuth on Linux and
+## Windows — so a Google-based assertion would pass on one and fail on the other.
 func test_availability_follows_the_backend() -> void:
-	Expect.that(_auth.is_available(Provider.GOOGLE)).to_be_false()
+	Expect.that(_auth.is_available(Provider.APPLE)).to_be_false()
 	Expect.that(_auth.is_configured(Provider.GOOGLE)).to_be_false()
 
+## An empty client ID leaves every backend unconfigured, [code]DesktopAuthBackend[/code]
+## included — a real desktop client ID would make it report configured, so a non-empty one
+## here would make this assertion depend on which platform the suite runs on.
 func test_configure_is_accepted_without_error() -> void:
-	_auth.configure(ProviderConfig.Google("w", "i", "d"))
+	_auth.configure(ProviderConfig.Google("", "", ""))
 	Expect.that(_auth.is_configured(Provider.GOOGLE)).to_be_false()
 
 func test_sign_in_surfaces_the_backend_unavailability() -> void:
-	Expect.that(_session_failure_name(await _auth.sign_in(Provider.GOOGLE))).to_equal("unavailable")
+	Expect.that(_session_failure_name(await _auth.sign_in(Provider.APPLE))).to_equal("unavailable")
 
 func test_sign_in_silent_surfaces_the_backend_unavailability() -> void:
 	Expect.that(_session_failure_name(await _auth.sign_in_silent(Provider.APPLE))) \
