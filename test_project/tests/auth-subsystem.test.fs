@@ -312,6 +312,24 @@ func test_a_401_with_no_session_reaches_no_refresh() -> void:
 	Expect.that(_describe_response(result)).to_equal("fail:session_expired")
 	Expect.that(_transport.send_count).to_equal(1)
 
+func test_a_retry_is_abandoned_when_the_session_was_replaced_mid_request() -> void:
+	# The first attempt was authorized as one player. If a second sign-in lands while the
+	# refresh is settling, replaying would authorize the same mutating request as the player
+	# who signed in instead — an operation asked for on one account executing against another.
+	await _install_session("access-a", "refresh-a")
+	_transport.enqueue(HttpOutcome.Answered(401, PackedByteArray()))
+	_transport.enqueue(HttpOutcome.Answered(200, _fresh_session_json()))
+	var body: Dictionary[String, Variant] = {"amount": 100}
+	var pending: Coroutine[ResponseResult] = _subsystem.request(
+			HttpMethod.POST, "/transfer", body)
+	# The refresh settles one message-queue turn later, so the request is suspended here and
+	# a second sign-in can land before it replays.
+	await _install_session("access-b", "refresh-b")
+	Expect.that(_describe_response(await pending)).to_equal("fail:session_expired")
+	Expect.that(_transport.send_count).to_equal(2)
+	Expect.that(_subsystem.access_token()).to_equal("access-b")
+	Expect.that(_session_expired_count).to_equal(0)
+
 func test_a_request_body_is_sent_as_json() -> void:
 	await _install_session("access-one", _REFRESH_TOKEN)
 	_transport.enqueue(HttpOutcome.Answered(200, "{}".to_utf8_buffer()))

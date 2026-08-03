@@ -19,7 +19,8 @@ import games.cafecito.foundrykit.core
 ## [b]One retry, never a loop.[/b] A 401 on an authorized request buys exactly one refresh
 ## and exactly one replay. The retry is written as a single call on the success branch of
 ## the refresh rather than as a loop with a counter, so the bound is structural: there is
-## no counter to get wrong and no path back to the first attempt.
+## no counter to get wrong and no path back to the first attempt. The replay is bound to the
+## session the first attempt was authorized under — see [method _replaced_mid_request].
 ##
 ## [b]Announcements are per event, not per caller.[/b] [SessionStore] emits nothing and
 ## reports [method SessionStore.rotation_count] instead, because a refresh is single-flight:
@@ -72,6 +73,13 @@ var _announced_rotation_count: int = 0
 ## a session is installed, set again by every explicit sign-out so that ending a session on
 ## purpose is never reported as one lapsing.
 var _lapse_announced: bool = true
+
+## Counts the times the held session was replaced or dropped outright.
+##
+## A refresh does not advance it — renewing a session leaves it the same session. Signing
+## in, restoring and signing out do, which is what lets a request that is already in flight
+## tell that the session it was authorized under is no longer the one held.
+var _session_generation: int = 0
 
 ## Builds the subsystem.
 ##
@@ -203,9 +211,12 @@ async func clear_session() -> CompletionResult:
 ## Exhaustive over [SessionResult]; the trailing return exists only because the analyser
 ## cannot see that the match is total.
 async func request(method: HttpMethod, path: String, body: Variant) -> ResponseResult:
+	var generation: int = _session_generation
 	var first: ResponseResult = await _client.request(method, path, body, _store.access_token())
 	if not _is_refused(first):
 		return first
+	if generation != _session_generation:
+		return _replaced_mid_request()
 
 	_log.debug("the backend refused the presented token; refreshing once before retrying")
 	var refreshed: SessionResult = await _refresh_and_announce()
@@ -213,11 +224,24 @@ async func request(method: HttpMethod, path: String, body: Variant) -> ResponseR
 		SessionResult.Failure(error):
 			return ResponseResult.Failure(error)
 		SessionResult.Success(_session):
+			if generation != _session_generation:
+				return _replaced_mid_request()
 			var retried: ResponseResult = await _client.request(
 					method, path, body, _store.access_token())
 			return _result_of_retry(retried)
 	return ResponseResult.Failure(AuthError.InvalidResponse(
 			"the session store reported a result this subsystem does not understand"))
+
+## Reports a request whose session was replaced while it was still in flight.
+##
+## The first attempt was authorized as one session; a replay would be authorized as whoever
+## is signed in now. A mutating request made for one account would then execute against
+## another, so it is abandoned instead. The session the request belonged to no longer
+## exists, which is what the caller is told — and no lapse is announced, because nothing
+## lapsed: a sign-in or a sign-out replaced it on purpose.
+func _replaced_mid_request() -> ResponseResult:
+	_log.debug("abandoning a request whose session was replaced while it was in flight")
+	return ResponseResult.Failure(AuthError.SessionExpired(0))
 
 ## Returns what a replayed request resolves to.
 ##
@@ -420,17 +444,20 @@ func _announce_lapse(error: AuthError) -> void:
 ## Makes [param session] the active one and re-arms both announcements for it.
 func _install(session: AuthSession) -> void:
 	_store.set_session(session)
+	_session_generation += 1
 	_announced_rotation_count = _store.rotation_count()
 	_lapse_announced = false
 
 ## Ends the session on purpose. Nothing lapsed, so nothing is announced.
 func _forget() -> void:
 	_store.clear()
+	_session_generation += 1
 	_lapse_announced = true
 
 ## Ends the session because the backend refused it, leaving the lapse still to announce.
 func _forget_lapsed() -> void:
 	_store.clear()
+	_session_generation += 1
 
 ## Returns the expiry instant of the session held right now, or 0 when none is held.
 func _current_expiry() -> int:
