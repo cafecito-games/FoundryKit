@@ -21,6 +21,7 @@ tasks:
       - scripts/test-import-boundaries
       - scripts/test-foundry-script-strict
       - scripts/test-uid-coverage
+      - scripts/test-package-product-name
 
   uids:
     desc: Generate .uid files for addon scripts missing one

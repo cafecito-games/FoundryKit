@@ -51,6 +51,12 @@ package_product=$(
 [[ -n "$package_product" ]] ||
 	apple_fail "no FoundrySwift package-product framework in $products/Release/PackageFrameworks"
 
+# The .foundryextension files name the wrapper literally — they have no expansion — so a
+# pin bump that moves the hash has to fail here. Otherwise it produces a green build whose
+# extension names a wrapper that no longer exists, and the failure surfaces only as a
+# backend that silently reports itself unavailable at runtime.
+"$repo_root/scripts/test-package-product-name" --expect "$package_product"
+
 # Packs one framework's per-platform slices into an xcframework, failing on the first
 # slice xcodebuild did not produce rather than emitting a partial artefact.
 create_xcframework() {
