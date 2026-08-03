@@ -107,7 +107,10 @@ Breaking one is a defect, not a style preference.
 1. **`core/` never references a subsystem.** No `auth`, `purchase` or `mobile` import,
    type, or string.
 2. **No subsystem imports another subsystem.**
-3. **Only files under an `internal/` directory import an `internal` namespace.**
+3. **Only a subsystem's own files import that subsystem's `internal` namespace.** A
+   public file may import its own subsystem's `internal` helpers (e.g. `auth/` importing
+   `auth.internal`); it may not import another subsystem's `internal` namespace, and a
+   file outside every subsystem (e.g. `core/`) may not import any `internal` namespace.
 4. **`FoundryKitCore` holds no shared mutable state.** It is loaded once and shared by
    three dynamically loaded frameworks, so logging config and registries are per-instance
    values passed at construction, never statics.

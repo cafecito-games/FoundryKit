@@ -36,13 +36,24 @@ for subsystem in "${subsystems[@]}"; do
     done
 done
 
-# Only files under an internal/ directory may import an internal namespace.
+# A non-internal file may only import its own subsystem's internal namespace — never
+# another subsystem's, and never from a file outside every subsystem (e.g. core/).
 while IFS= read -r hit; do
     [ -n "$hit" ] || continue
     case "$hit" in
-        */internal/*) ;;
-        *) fail "non-internal file imports an internal namespace: $hit" ;;
+        */internal/*) continue ;;
     esac
+    imported_subsystem=$(rg -No "^import[[:space:]]+games\.cafecito\.foundrykit\.([a-z]+)\.internal\b" \
+        -r '$1' "$hit" | head -n1)
+    owning_subsystem=""
+    for subsystem in "${subsystems[@]}"; do
+        case "$hit" in
+            "$addon/$subsystem"/*) owning_subsystem="$subsystem" ;;
+        esac
+    done
+    if [ "$owning_subsystem" != "$imported_subsystem" ]; then
+        fail "file outside '${imported_subsystem}/internal' imports its internal namespace: $hit"
+    fi
 done < <(rg -l "^import[[:space:]]+games\.cafecito\.foundrykit\.[a-z]+\.internal\b" "$addon" || true)
 
 if [ "$status" -eq 0 ]; then
