@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# Populates the Foundry-Swift-Binary checkout's Binaries/ directory.
+#
+# Foundry-Swift-Binary declares path-based `.binaryTarget`s under Binaries/, but that
+# directory is gitignored in the upstream repository — the tag carries only the manifest
+# `binaries.json`, which names the release assets and their SHA-256 checksums. SwiftPM
+# resolves the tag on its own and then fails validation with "does not contain a binary
+# artifact" until the assets are unpacked here.
+#
+# The assets live on public releases of cafecito-games/Foundry-Swift, so this downloads
+# them anonymously over HTTPS. No token and no authenticated `gh` are required.
+set -euo pipefail
+
+package_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+checkout="$package_dir/.build/checkouts/Foundry-Swift-Binary"
+
+for command_name in curl unzip shasum python3; do
+	command -v "$command_name" >/dev/null 2>&1 || {
+		echo "prepare-foundryswift-binary: missing required command: $command_name" >&2
+		exit 1
+	}
+done
+
+if [[ ! -d "$checkout" ]]; then
+	echo "Resolving Swift packages to create the Foundry-Swift-Binary checkout..."
+	# Resolution reports the missing binary artifacts as an error but still writes the
+	# checkout, which is all this step needs.
+	(cd "$package_dir" && swift package resolve) || true
+fi
+
+manifest="$checkout/binaries.json"
+[[ -f "$manifest" ]] || {
+	echo "prepare-foundryswift-binary: no binaries.json at $manifest" >&2
+	exit 1
+}
+
+read_manifest() {
+	python3 -c '
+import json, sys
+
+with open(sys.argv[1]) as manifest_file:
+    manifest = json.load(manifest_file)
+
+print(manifest["version"])
+for artifact in manifest["artifacts"]:
+    print("\t".join([artifact["url"], artifact["checksum"], artifact["localPath"]]))
+' "$manifest"
+}
+
+manifest_lines=$(read_manifest)
+version=$(printf '%s\n' "$manifest_lines" | head -n 1)
+marker="$checkout/Binaries/.foundrykit-artifact-version"
+
+if [[ -f "$marker" && "$(cat "$marker")" == "$version" ]]; then
+	echo "Foundry-Swift-Binary $version artifacts already present."
+	exit 0
+fi
+
+download_dir=$(mktemp -d)
+trap 'rm -rf "$download_dir"' EXIT
+
+rm -rf "$checkout/Binaries"
+mkdir -p "$checkout/Binaries"
+
+while IFS=$'\t' read -r url checksum local_path; do
+	[[ -n "$url" ]] || continue
+	archive="$download_dir/$(basename "$url")"
+	echo "Downloading $(basename "$url")..."
+	curl --fail --location --silent --show-error --output "$archive" "$url"
+
+	actual_checksum=$(shasum -a 256 "$archive" | cut -d ' ' -f 1)
+	if [[ "$actual_checksum" != "$checksum" ]]; then
+		echo "prepare-foundryswift-binary: checksum mismatch for $url" >&2
+		echo "  expected $checksum" >&2
+		echo "  actual   $actual_checksum" >&2
+		exit 1
+	fi
+
+	unzip -q -o "$archive" -d "$checkout/Binaries"
+	[[ -e "$checkout/$local_path" ]] || {
+		echo "prepare-foundryswift-binary: archive did not produce $local_path" >&2
+		exit 1
+	}
+done < <(printf '%s\n' "$manifest_lines" | tail -n +2)
+
+printf '%s\n' "$version" >"$marker"
+echo "Foundry-Swift-Binary $version artifacts are ready in $checkout/Binaries."
