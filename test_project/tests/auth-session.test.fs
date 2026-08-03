@@ -51,6 +51,7 @@ func test_expiry_is_read_from_the_access_token() -> void:
 	var session: AuthSession = AuthSession.new(_TOKEN, "refresh", Provider.GOOGLE, raw, extras)
 	Expect.that(session.expires_at()).to_equal(1750000000)
 	Expect.that(session.is_expired_at(1750000001)).to_be_true()
+	Expect.that(session.is_expired_at(1750000000)).to_be_true()
 	Expect.that(session.is_expired_at(1749999999)).to_be_false()
 
 func test_token_without_expiry_never_expires() -> void:

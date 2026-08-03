@@ -39,11 +39,14 @@ func expires_at() -> int:
 	return Jwt.expiry_from(access_token)
 
 ## Returns whether the session is expired at [param now_unix_seconds].
+##
+## Per RFC 7519, [code]exp[/code] is the instant on or after which a token must not be
+## accepted, so the boundary itself counts as expired.
 func is_expired_at(now_unix_seconds: int) -> bool:
 	var expiry: int = expires_at()
 	if expiry == 0:
 		return false
-	return now_unix_seconds > expiry
+	return now_unix_seconds >= expiry
 
 ## Returns an independent copy; mutating it cannot affect this session.
 func duplicate_session() -> AuthSession:
