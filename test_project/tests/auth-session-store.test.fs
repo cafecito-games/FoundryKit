@@ -136,7 +136,7 @@ func test_concurrent_refreshes_count_exactly_one_rotation() -> void:
 	await second
 	Expect.that(_store.rotation_count()).to_equal(1)
 
-func test_a_refresh_returning_the_same_access_token_counts_no_rotation() -> void:
+func test_a_refresh_returning_both_tokens_unchanged_counts_no_rotation() -> void:
 	_store.set_session(_session("access-one", _REFRESH_TOKEN))
 	_transport.enqueue(HttpOutcome.Answered(200, _json({
 		"access_token": "access-one",
@@ -145,6 +145,19 @@ func test_a_refresh_returning_the_same_access_token_counts_no_rotation() -> void
 	var result: SessionResult = await _store.refresh()
 	Expect.that(_describe(result)).to_equal("ok:access-one")
 	Expect.that(_store.rotation_count()).to_equal(0)
+
+func test_a_rotated_refresh_token_counts_a_rotation_on_its_own() -> void:
+	# Backends rotate the two tokens independently. One that hands back the same access
+	# token with a new refresh token has still retired a credential its holder must stop
+	# presenting, so that has to be reported.
+	_store.set_session(_session("access-one", _REFRESH_TOKEN))
+	_transport.enqueue(HttpOutcome.Answered(200, _json({
+		"access_token": "access-one",
+		"refresh_token": "rotated-refresh-token",
+	})))
+	await _store.refresh()
+	Expect.that(_store.refresh_token()).to_equal("rotated-refresh-token")
+	Expect.that(_store.rotation_count()).to_equal(1)
 
 func test_a_refresh_keeps_the_previous_refresh_token_when_the_backend_omits_one() -> void:
 	# A backend that does not rotate refresh tokens returns only a new access token.

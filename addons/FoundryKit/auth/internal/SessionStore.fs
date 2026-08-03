@@ -87,12 +87,16 @@ func refresh_token() -> String:
 	var active: AuthSession = current
 	return active.refresh_token
 
-## Counts the refreshes that replaced the access token with a different one.
+## Counts the refreshes that replaced either token with a different one.
 ##
 ## This is how a caller reports rotation without this class emitting anything. Because
 ## refreshes are single-flight, N concurrent callers see the counter advance exactly once,
 ## so a caller that remembers the last count it announced announces each rotation once.
-## A refresh the backend answers with the same access token advances nothing: no token
+##
+## Both tokens count, because a backend may rotate them independently: one that returns a
+## still-valid access token alongside a new refresh token has rotated a credential its
+## holder must not keep using, and counting only the access token would hide that.
+## A refresh the backend answers with both tokens unchanged advances nothing — nothing
 ## rotated, so there is nothing to announce.
 func rotation_count() -> int:
 	return _rotation_count
@@ -201,10 +205,20 @@ func _install(
 				_log.debug("discarding a refreshed session the store no longer wants")
 				return _current_result()
 			_session = refreshed
-			if refreshed.access_token != session.access_token:
+			if _rotated(session, refreshed):
 				_rotation_count += 1
 			return result
 	return result
+
+## Returns whether a refresh handed back a different credential in either token.
+##
+## Backends rotate the two independently: some issue a new access token against a
+## long-lived refresh token, others rotate the refresh token on every use. Either one
+## replacing its predecessor is a rotation the holder of the old value needs to hear about.
+func _rotated(previous: AuthSession, refreshed: AuthSession) -> bool:
+	if refreshed.access_token != previous.access_token:
+		return true
+	return refreshed.refresh_token != previous.refresh_token
 
 ## Reports the session the store holds right now, for a caller whose own round was
 ## superseded.
