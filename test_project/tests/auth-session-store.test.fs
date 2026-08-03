@@ -52,6 +52,37 @@ func test_clearing_drops_the_session() -> void:
 	Expect.that(_store.has_session()).to_be_false()
 	Expect.that(_store.access_token()).to_equal("")
 
+func test_the_store_keeps_a_copy_of_the_session_it_is_given() -> void:
+	# An AuthSession is mutable. If the store kept the caller's instance, changing a token
+	# on it would move the store off the session it believes it holds without ever passing
+	# through set_session, which is what the stale-reply guard is keyed on.
+	var given: AuthSession = _session("access-one", _REFRESH_TOKEN)
+	_store.set_session(given)
+	given.access_token = "tampered"
+	Expect.that(_store.access_token()).to_equal("access-one")
+
+func test_the_session_handed_out_is_a_copy() -> void:
+	_store.set_session(_session("access-one", _REFRESH_TOKEN))
+	var handed_out: AuthSession? = _store.session()
+	Expect.that(handed_out != null).to_be_true()
+	var taken: AuthSession = handed_out
+	taken.access_token = "tampered"
+	Expect.that(_store.access_token()).to_equal("access-one")
+
+func test_a_refreshed_session_is_handed_out_as_a_copy() -> void:
+	_store.set_session(_session("access-one", _REFRESH_TOKEN))
+	_transport.enqueue(HttpOutcome.Answered(200, _fresh_session_json()))
+	var result: SessionResult = await _store.refresh()
+	match result:
+		SessionResult.Success(refreshed):
+			refreshed.access_token = "tampered"
+		SessionResult.Failure(_error):
+			Expect.that("failure").to_equal("success")
+	Expect.that(_store.access_token()).to_equal("fresh-access-token")
+
+func test_a_store_without_a_session_hands_out_null() -> void:
+	Expect.that(_store.session() == null).to_be_true()
+
 func test_two_stores_do_not_share_session_state() -> void:
 	var other: SessionStore = SessionStore.new(
 			_log, BackendClient.new(_log, FakeHttpClient.new(), _config))
@@ -194,11 +225,52 @@ func test_a_401_on_refresh_reports_the_session_as_expired() -> void:
 	Expect.that(_describe(result)).to_equal("fail:session_expired:1750000000")
 	Expect.that(_transport.send_count).to_equal(1)
 
+func test_a_rejected_refresh_token_ends_the_session() -> void:
+	# The refresh token is the only credential a refresh can present. Once the backend has
+	# refused it, holding the session would leave has_session() answering yes while every
+	# later refresh replays a credential that has already been retired.
+	_store.set_session(_session(_EXPIRED_TOKEN, _REFRESH_TOKEN))
+	_transport.enqueue(HttpOutcome.Answered(401, PackedByteArray()))
+	await _store.refresh()
+	Expect.that(_store.has_session()).to_be_false()
+	var result: SessionResult = await _store.refresh()
+	Expect.that(_describe(result)).to_equal("fail:session_expired:0")
+	Expect.that(_transport.send_count).to_equal(1)
+
+func test_a_rejection_arriving_after_a_replacement_leaves_the_new_session_alone() -> void:
+	_store.set_session(_session(_EXPIRED_TOKEN, _REFRESH_TOKEN))
+	_transport.enqueue(HttpOutcome.Answered(401, PackedByteArray()))
+	var pending: Coroutine[SessionResult] = _store.refresh()
+	_store.set_session(_session("access-b", "refresh-b"))
+	await pending
+	Expect.that(_store.access_token()).to_equal("access-b")
+
 func test_a_response_without_an_access_token_is_a_missing_field() -> void:
 	_store.set_session(_session("access-one", _REFRESH_TOKEN))
 	_transport.enqueue(HttpOutcome.Answered(200, _json({"token_type": "Bearer"})))
 	var result: SessionResult = await _store.refresh()
 	Expect.that(_describe(result)).to_equal("fail:missing_field:access_token")
+
+func test_a_non_string_access_token_is_an_invalid_response() -> void:
+	# Stringifying whatever arrived would turn a number into a plausible-looking credential
+	# and then present it as a bearer token on every later request.
+	_store.set_session(_session("access-one", _REFRESH_TOKEN))
+	_transport.enqueue(HttpOutcome.Answered(200, _json({"access_token": 12345})))
+	var result: SessionResult = await _store.refresh()
+	Expect.that(_describe(result)).to_equal(
+			"fail:invalid_response:the refresh response carried a non-string access_token")
+	Expect.that(_store.access_token()).to_equal("access-one")
+
+func test_a_non_string_refresh_token_is_an_invalid_response() -> void:
+	_store.set_session(_session("access-one", _REFRESH_TOKEN))
+	_transport.enqueue(HttpOutcome.Answered(200, _json({
+		"access_token": "access-two",
+		"refresh_token": {"nested": true},
+	})))
+	var result: SessionResult = await _store.refresh()
+	Expect.that(_describe(result)).to_equal(
+			"fail:invalid_response:the refresh response carried a non-string refresh_token")
+	Expect.that(_store.refresh_token()).to_equal(_REFRESH_TOKEN)
 
 func test_a_response_that_is_not_json_is_an_invalid_response() -> void:
 	_store.set_session(_session("access-one", _REFRESH_TOKEN))

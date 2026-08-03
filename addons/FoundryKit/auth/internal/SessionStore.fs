@@ -76,9 +76,18 @@ func _init(log: FoundryKitLog, client: BackendClient) -> void:
 func has_session() -> bool:
 	return _session != null
 
-## Returns the held session, or null when there is none.
+## Returns an independent copy of the held session, or null when there is none.
+##
+## A copy rather than the session itself: [AuthSession] is mutable, and a caller that
+## changed the tokens on the stored instance would move the store off the session it
+## believes it holds without passing through [method set_session]. Every session leaving
+## this class is a copy for the same reason.
 func session() -> AuthSession?:
-	return _session
+	var current: AuthSession? = _session
+	if current == null:
+		return null
+	var active: AuthSession = current
+	return active.duplicate_session()
 
 ## Returns the held access token, or an empty string when no session is held.
 func access_token() -> String:
@@ -114,8 +123,11 @@ func rotation_count() -> int:
 ##
 ## Ranks above a refresh already in flight: a reply that lands afterwards is discarded
 ## rather than allowed to overwrite this decision.
+##
+## Stores a copy, so a caller that keeps and later mutates the session it passed cannot
+## change what the store holds behind its back.
 func set_session(new_session: AuthSession) -> void:
-	_session = new_session
+	_session = new_session.duplicate_session()
 	_session_generation += 1
 
 ## Drops the active session.
@@ -181,7 +193,23 @@ async func _run_refresh(round_id: int, session: AuthSession, generation: int) ->
 	var response: ResponseResult = await _client.request(
 			HttpMethod.POST, _client.config().refresh_path, body)
 	var result: SessionResult = _session_of(response, session)
-	_finish_refresh.call_deferred(round_id, result, session, generation)
+	_finish_refresh.call_deferred(
+			round_id, result, session, generation, _is_rejected(response))
+
+## Returns whether the backend rejected the refresh token itself, as opposed to the request
+## having failed for any other reason.
+##
+## [BackendClient] reports a 401 as a success carrying
+## [member AuthResponse.session_expired], because whether a rejection is fatal is the
+## caller's decision. For a refresh it is: the credential presented was the refresh token,
+## and there is no other one to present.
+func _is_rejected(response: ResponseResult) -> bool:
+	match response:
+		ResponseResult.Success(answer):
+			return answer.session_expired
+		ResponseResult.Failure(_error):
+			return false
+	return false
 
 ## Closes a round: clears the in-flight marker first, then resumes everyone waiting on it.
 ##
@@ -196,35 +224,55 @@ func _finish_refresh(
 		round_id: int,
 		result: SessionResult,
 		session: AuthSession,
-		generation: int) -> void:
+		generation: int,
+		rejected: bool) -> void:
 	if round_id != _refresh_round or not _refresh_in_flight:
 		return
 	_refresh_in_flight = false
 	_in_flight.erase(self)
-	_refresh_settled.emit(_install(result, session, generation))
+	_refresh_settled.emit(_install(result, session, generation, rejected))
 
 ## Applies a completed round to the store and returns what its callers see.
 ##
-## A failure changes nothing: the previous session stays held, so a caller that can still
-## use it is not signed out by one unreachable backend.
+## An ordinary failure changes nothing: the previous session stays held, so a caller that
+## can still use it is not signed out by one unreachable backend. A rejection is different —
+## the backend refused the refresh token, so the session is over and holding it would leave
+## [method has_session] answering yes while every later refresh replays a credential the
+## backend has already retired.
 func _install(
 		result: SessionResult,
 		session: AuthSession,
-		generation: int) -> SessionResult:
+		generation: int,
+		rejected: bool) -> SessionResult:
+	if generation != _session_generation:
+		# set_session or clear ran while the reply was in flight. That decision was
+		# explicit and this reply was already on its way, so the reply loses: neither a
+		# refreshed session nor a rejection may disturb a session chosen since.
+		_log.debug("discarding a refresh result the store no longer wants")
+		return _superseded_result(result)
 	match result:
 		SessionResult.Failure(_error):
+			if rejected:
+				_session = null
 			return result
 		SessionResult.Success(refreshed):
-			if generation != _session_generation:
-				# set_session or clear ran while the reply was in flight. That decision was
-				# explicit and this reply was already on its way, so the reply loses: a
-				# refreshed session must never resurrect one that was signed out.
-				_log.debug("discarding a refreshed session the store no longer wants")
-				return _current_result()
 			_session = refreshed
 			if _rotated(session, refreshed):
 				_rotation_count += 1
+			return SessionResult.Success(refreshed.duplicate_session())
+	return result
+
+## Returns what a caller sees when its round was superseded by an explicit session change.
+##
+## A failure stays a failure — the round genuinely failed, and reporting the session that
+## replaced it as this round's success would be a lie. A success is answered with whatever
+## the store holds now, which is what the caller was after.
+func _superseded_result(result: SessionResult) -> SessionResult:
+	match result:
+		SessionResult.Failure(_error):
 			return result
+		SessionResult.Success(_refreshed):
+			return _current_result()
 	return result
 
 ## Returns whether a refresh handed back a different credential in either token.
@@ -244,7 +292,7 @@ func _current_result() -> SessionResult:
 	if current == null:
 		return SessionResult.Failure(AuthError.SessionExpired(0))
 	var active: AuthSession = current
-	return SessionResult.Success(active)
+	return SessionResult.Success(active.duplicate_session())
 
 ## Maps a backend reply onto a session result.
 ##
@@ -268,18 +316,39 @@ func _session_of(response: ResponseResult, session: AuthSession) -> SessionResul
 ## previous refresh token is kept in that case rather than being blanked, which would leave
 ## the session unrenewable from then on. The provider and the extras come from the session
 ## being renewed — a refresh reply restates neither.
+##
+## Both tokens must arrive as JSON strings. Stringifying whatever turned up instead would
+## turn a number, an object or a null into a plausible-looking credential and then present
+## it as a bearer token on every later request; a reply that does not carry a string token
+## is malformed, and saying so is the only honest reading.
 func _session_from_body(response: AuthResponse, session: AuthSession) -> SessionResult:
 	var parsed: Variant = response.json()
 	if not (parsed is Dictionary):
 		return SessionResult.Failure(AuthError.InvalidResponse(
 				"the refresh response was not a JSON object"))
 	var payload: Dictionary = parsed
-	var access_token: String = str(payload.get("access_token", ""))
+
+	var raw_access_token: Variant = payload.get("access_token")
+	if raw_access_token == null:
+		return SessionResult.Failure(AuthError.MissingField("access_token"))
+	if not (raw_access_token is String):
+		return SessionResult.Failure(AuthError.InvalidResponse(
+				"the refresh response carried a non-string access_token"))
+	var access_token: String = raw_access_token
 	if access_token.is_empty():
 		return SessionResult.Failure(AuthError.MissingField("access_token"))
-	var refreshed_token: String = str(payload.get("refresh_token", ""))
-	if refreshed_token.is_empty():
-		refreshed_token = session.refresh_token
+
+	# A backend that does not rotate refresh tokens omits it; the previous one is kept.
+	var refreshed_token: String = session.refresh_token
+	var raw_refresh_token: Variant = payload.get("refresh_token")
+	if raw_refresh_token != null:
+		if not (raw_refresh_token is String):
+			return SessionResult.Failure(AuthError.InvalidResponse(
+					"the refresh response carried a non-string refresh_token"))
+		var rotated_token: String = raw_refresh_token
+		if not rotated_token.is_empty():
+			refreshed_token = rotated_token
+
 	var raw: Dictionary[String, Variant] = {}
 	for key: Variant in payload.keys():
 		raw[str(key)] = payload[key]
