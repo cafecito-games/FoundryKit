@@ -67,3 +67,20 @@ func test_opaque_token_reports_no_expiry() -> void:
 func test_non_numeric_exp_reports_no_expiry() -> void:
 	# {"exp":"soon"} -> eyJleHAiOiJzb29uIn0
 	Expect.that(Jwt.has_expiry("aaa.eyJleHAiOiJzb29uIn0.sig")).to_be_false()
+
+func test_string_claims_are_decoded() -> void:
+	# {"email":"ada@example.com","name":"Ada Lovelace"}
+	var token: String = "aaa.eyJlbWFpbCI6ImFkYUBleGFtcGxlLmNvbSIsIm5hbWUiOiJBZGEgTG92ZWxhY2UifQ.sig"
+	Expect.that(Jwt.string_claim_from(token, "email")).to_equal("ada@example.com")
+	Expect.that(Jwt.string_claim_from(token, "name")).to_equal("Ada Lovelace")
+
+func test_an_absent_or_undecodable_string_claim_is_empty() -> void:
+	Expect.that(Jwt.string_claim_from(_VALID, "email")).to_equal("")
+	Expect.that(Jwt.string_claim_from("", "email")).to_equal("")
+	Expect.that(Jwt.string_claim_from("not-a-jwt", "email")).to_equal("")
+
+## A claim that is present but is not a string is about to be shown to a player, so it is
+## reported absent rather than rendered.
+func test_a_non_string_claim_is_reported_absent() -> void:
+	# {"name":["Ada"]} -> eyJuYW1lIjpbIkFkYSJdfQ
+	Expect.that(Jwt.string_claim_from("aaa.eyJuYW1lIjpbIkFkYSJdfQ.sig", "name")).to_equal("")

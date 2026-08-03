@@ -15,6 +15,21 @@ static func subject_from(token: String) -> String:
 		return ""
 	return str(claims.get("sub", ""))
 
+## Returns a string claim, or an empty string when it is absent or undecodable.
+##
+## A claim that is present but is not a string is reported absent rather than stringified:
+## a caller reading `name` out of an ID token is about to show it to a player, and showing
+## them a rendered array or dictionary is worse than showing them nothing.
+static func string_claim_from(token: String, claim: String) -> String:
+	var claims: Dictionary = _claims_of(token)
+	if claims.is_empty():
+		return ""
+	var value: Variant = claims.get(claim)
+	if not (value is String):
+		return ""
+	var text: String = value
+	return text
+
 ## Returns the `exp` claim as a Unix timestamp, or 0 when absent or undecodable.
 ##
 ## Accepts both int and float encodings; JSON parsers commonly widen large integers.
