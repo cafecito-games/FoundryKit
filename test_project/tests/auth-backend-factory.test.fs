@@ -19,9 +19,12 @@ func test_apple_platforms_resolve_to_the_apple_backend() -> void:
 		var backend: AuthBackend = _factory.resolve(platform)
 		Expect.that(backend.backend_name()).to_equal("apple")
 
+func test_desktop_platform_resolves_to_the_desktop_backend() -> void:
+	var backend: AuthBackend = _factory.resolve(PlatformKind.DESKTOP)
+	Expect.that(backend.backend_name()).to_equal("desktop")
+
 func test_other_platforms_still_resolve_to_null() -> void:
-	for platform: PlatformKind in [PlatformKind.ANDROID, PlatformKind.DESKTOP,
-			PlatformKind.UNKNOWN]:
+	for platform: PlatformKind in [PlatformKind.ANDROID, PlatformKind.UNKNOWN]:
 		var backend: AuthBackend = _factory.resolve(platform)
 		Expect.that(backend.backend_name()).to_equal("null")
 
@@ -30,9 +33,9 @@ func test_apple_backend_reports_unavailable_without_the_native_binary() -> void:
 	var backend: AuthBackend = _factory.resolve(PlatformKind.IOS)
 	Expect.that(backend.is_available(Provider.GOOGLE)).to_be_false()
 
-## `resolve_current` returns whatever the host platform maps to, which is now the Apple
-## backend on a developer's Mac and the Null backend on the Linux CI runner. Asserting a
-## specific name here would make the suite pass in one place and fail in the other.
+## `resolve_current` returns whatever the host platform maps to — the Apple backend on a
+## developer's Mac, the desktop backend on the Linux CI runner. Asserting a specific name
+## here would make the suite pass in one place and fail in the other.
 func test_resolve_current_returns_a_usable_backend() -> void:
 	var backend: AuthBackend = _factory.resolve_current()
 	Expect.that(backend.backend_name().is_empty()).to_be_false()

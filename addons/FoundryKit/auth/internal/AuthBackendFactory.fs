@@ -23,15 +23,20 @@ func _init(log: FoundryKitLog) -> void:
 
 ## Returns the platform backend, or null when none applies.
 ##
-## Android is epic F and the desktop OAuth loopback is epic D; both still fall back to the
-## Null backend, which is the correct answer until those exist. The Apple backend is
-## returned whether or not its binary is installed — it probes [ClassDB] itself and reports
-## unavailable when the class is absent, so routing never depends on the binary.
+## Android is epic F and still falls back to the Null backend, which is the correct
+## answer until it exists. The Apple backend is returned whether or not its binary is
+## installed — it probes [ClassDB] itself and reports unavailable when the class is
+## absent, so routing never depends on the binary. [DesktopAuthBackend] is constructed
+## with only its production [HttpTransport]; its browser opener and loopback listener
+## stay at their injected defaults, so selecting it here never opens a browser or reaches
+## the network.
 func for_platform(platform: PlatformKind) -> AuthBackend?:
 	match platform:
 		PlatformKind.IOS, PlatformKind.MACOS:
 			return AppleAuthBackend.new(_log)
-		PlatformKind.ANDROID, PlatformKind.DESKTOP, PlatformKind.UNKNOWN:
+		PlatformKind.DESKTOP:
+			return DesktopAuthBackend.new(_log, HttpClient.new(_log))
+		PlatformKind.ANDROID, PlatformKind.UNKNOWN:
 			return null
 	return null
 
