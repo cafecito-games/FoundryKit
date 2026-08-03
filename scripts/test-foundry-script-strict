@@ -37,6 +37,37 @@ do
         "core/${core_file}.fs must use the core namespace"
 done
 
+# --- auth subsystem ---------------------------------------------------------
+auth="$addon/auth"
+
+for auth_file in Provider ProviderConfig AuthError Credential AuthSession AuthResponse \
+                 HttpMethod CredentialResult SessionResult TokenResult ResponseResult \
+                 CompletionResult AuthApi AuthSubsystem
+do
+    path="$auth/${auth_file}.fs"
+    [[ -f "$path" ]] || fail "auth/${auth_file}.fs is missing"
+    assert_contains "$path" '^namespace games\.cafecito\.foundrykit\.auth$' \
+        "auth/${auth_file}.fs must use the auth namespace"
+done
+
+for internal_file in Jwt AuthBackend NullAuthBackend AuthBackendFactory
+do
+    path="$auth/internal/${internal_file}.fs"
+    [[ -f "$path" ]] || fail "auth/internal/${internal_file}.fs is missing"
+    assert_contains "$path" '^namespace games\.cafecito\.foundrykit\.auth\.internal$' \
+        "auth/internal/${internal_file}.fs must use the auth internal namespace"
+done
+
+# Contracts must be traits: a namespaced class_name cannot be extended across files.
+assert_contains "$auth/internal/AuthBackend.fs" '^trait_name AuthBackend$' \
+    "AuthBackend must be a trait, not an abstract class"
+assert_contains "$auth/AuthApi.fs" '^trait_name AuthApi$' \
+    "AuthApi must be a trait"
+assert_contains "$auth/AuthSubsystem.fs" '^uses AuthApi$' \
+    "AuthSubsystem must satisfy AuthApi"
+assert_contains "$auth/internal/NullAuthBackend.fs" '^uses AuthBackend$' \
+    "NullAuthBackend must satisfy AuthBackend"
+
 # Error unions must be matched exhaustively; a wildcard branch defeats the checking that
 # makes the union redesign safe. A wildcard branch is written as a bare `_:` case, so this
 # has to find matches whose subject is NativeOutcome-typed and then look for a `_:` case
