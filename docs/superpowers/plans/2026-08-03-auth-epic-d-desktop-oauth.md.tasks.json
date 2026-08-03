@@ -1,0 +1,53 @@
+{
+  "planPath": "docs/superpowers/plans/2026-08-03-auth-epic-d-desktop-oauth.md",
+  "tasks": [
+    {
+      "id": 1,
+      "subject": "Task 1: PkcePair - verifier, challenge, state",
+      "status": "pending",
+      "description": "**Goal:** The cryptographic material for RFC 7636, isolated so it can be tested without a network or a browser.\n\n**Files:**\n- Create: addons/FoundryKit/auth/internal/PkcePair.fs\n- Create: test_project/tests/auth-pkce.test.fs\n\n**Acceptance Criteria:**\n- code_verifier is base64url, unpadded, 43-128 characters\n- code_challenge is BASE64URL(SHA256(ASCII(verifier))), verified against the RFC 7636 Appendix B vector (verifier dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk -> challenge E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM, confirmed by computation)\n- state is independently random and never equals the verifier\n- No +, / or = in any output\n- Two successive pairs differ\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/internal/PkcePair.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"challenge matches the RFC 7636 vector\", \"base64url has no + / or =\", \"state independent of verifier\"]}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "Task 2: LoopbackServer - accept one redirect",
+      "status": "pending",
+      "description": "**Goal:** Listen on an ephemeral loopback port, accept exactly one HTTP request, hand back its query, and reply with readable HTML.\n\n**Files:**\n- Create: addons/FoundryKit/auth/internal/LoopbackServer.fs, LoopbackOutcome.fs (own file - one head type per .fs)\n- Create: test_project/tests/auth-loopback-server.test.fs\n\n**READ core/HttpClient.fs and core/NativeRequest.fs FIRST.** Identical await-lifetime shape: static in-flight registry, single-settle guard, settling emission deferred one message-queue turn. #107 records that the naive version HANGS the suite rather than failing it.\n\n**Acceptance Criteria:**\n- Binds 127.0.0.1 port 0, reports the assigned port\n- Binds loopback ONLY - a network-reachable server accepts forged callbacks\n- Parses the first request line's query into a dictionary\n- Writes an HTTP response with HTML, then closes\n- Times out rather than waiting forever\n- stop() idempotent; stopping while waiting settles the wait\n- Settles exactly once\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/internal/LoopbackServer.fs\", \"addons/FoundryKit/auth/internal/LoopbackOutcome.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"loopback-only bind\", \"times out\", \"settles exactly once\", \"stop is idempotent\"]}\n```"
+    },
+    {
+      "id": 3,
+      "subject": "Task 3: The authorization URL",
+      "status": "pending",
+      "blockedBy": [1, 2],
+      "description": "**Goal:** Build the Google authorization URL correctly, and prove it, before anything opens a browser.\n\n**Files:**\n- Create: addons/FoundryKit/auth/internal/DesktopAuthBackend.fs\n- Create: test_project/tests/auth-desktop-url.test.fs\n\n**Acceptance Criteria:**\n- Includes client_id, redirect_uri, response_type=code, scope, code_challenge, code_challenge_method=S256, state, nonce\n- EVERY value percent-encoded (an unencoded redirect_uri is the classic bug)\n- Redirect URI is http://127.0.0.1:<actual bound port>/\n- Uses desktop_client_id, never web_client_id or ios_client_id\n- Asserts the FULL url against an expected string with a fixed pair and port, not a substring check\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/internal/DesktopAuthBackend.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"all values percent-encoded\", \"desktop_client_id used\", \"full-url assertion\"]}\n```"
+    },
+    {
+      "id": 4,
+      "subject": "Task 4: DesktopAuthBackend - the flow",
+      "status": "pending",
+      "blockedBy": [3],
+      "description": "**Goal:** Compose PKCE, browser, loopback listener and token exchange into a backend returning a Credential.\n\n**Files:**\n- Modify: addons/FoundryKit/auth/internal/DesktopAuthBackend.fs\n- Create: test_project/tests/support/fake_browser.notest.fs, test_project/tests/auth-desktop-backend.test.fs\n\n**Acceptance Criteria:**\n- Satisfies AuthBackend via uses\n- HttpTransport, browser opener and LoopbackServer factory INJECTED - no test opens a browser or reaches the network\n- state mismatch fails AND does not exchange the code (assert send_count == 0)\n- error= in the callback -> AuthError.Cancelled, not a generic failure\n- missing code -> AuthError.MissingField(\"code\")\n- Success -> Credential.Google with audience set to desktop_client_id\n- APPLE and EMAIL_PASSWORD -> Unavailable\n- sign_in_silent -> Unavailable (no stored session; storage out of scope)\n- Listener stopped on EVERY exit path, proven by a port-leak test\n- Session storage returns AuthError.Storage\n- backend_name() == \"desktop\"\n\n**Mutation-check:** remove the state comparison and the stop-on-failure; confirm named tests fail.\n\n**Verify:** task test:foundrylib && task test:scripts\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/internal/DesktopAuthBackend.fs\"], \"verifyCommand\": \"task test:foundrylib && task test:scripts\", \"acceptanceCriteria\": [\"state mismatch does not exchange (send_count 0)\", \"listener stopped on every path\", \"audience is desktop_client_id\"]}\n```"
+    },
+    {
+      "id": 5,
+      "subject": "Task 5: Route DESKTOP in the factory",
+      "status": "pending",
+      "blockedBy": [4],
+      "description": "**Goal:** Linux and Windows resolve to the desktop backend.\n\n**Files:**\n- Modify: addons/FoundryKit/auth/internal/AuthBackendFactory.fs\n- Modify: test_project/tests/auth-backend-factory.test.fs\n\n**Acceptance Criteria:**\n- DESKTOP -> DesktopAuthBackend (\"desktop\")\n- IOS/MACOS still \"apple\"; ANDROID/UNKNOWN still \"null\"\n- Epic-ownership comment updated, not deleted (Android is epic F)\n- NO test asserts a platform-specific name for resolve_current() - the suite runs on macOS locally and ubuntu in CI; #75 already had to fix exactly this\n- The desktop backend constructs without a browser or network\n\n**Verify:** task test:foundrylib && task test:scripts && task lint\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/internal/AuthBackendFactory.fs\"], \"verifyCommand\": \"task test:foundrylib && task test:scripts && task lint\", \"acceptanceCriteria\": [\"DESKTOP routes to desktop\", \"other platforms unchanged\", \"resolve_current assertion stays platform-independent\"]}\n```"
+    },
+    {
+      "id": 6,
+      "subject": "Task 6: End-to-end desktop flow test",
+      "status": "pending",
+      "blockedBy": [5],
+      "description": "**Goal:** One test driving the whole flow through the seams, so composition is verified rather than only its parts.\n\n**Files:**\n- Modify: test_project/tests/auth-desktop-backend.test.fs\n\n**Acceptance Criteria:**\n- configure -> sign_in -> assert the browser got a URL carrying the expected code_challenge and state -> deliver a matching callback to the REAL LoopbackServer over a real loopback socket -> assert the transport received the code and code_verifier -> return a token -> assert Credential.Google\n- Asserts send_count == 1 for the exchange\n- States plainly, in a doc comment and the PR body, what remains unverified: no real Google endpoint, no real browser, no real consent. Epic G owns that.\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"test_project/tests/auth-desktop-backend.test.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"full flow through real loopback socket\", \"send_count == 1\", \"limits stated explicitly\"]}\n```"
+    },
+    {
+      "id": 7,
+      "subject": "Task 7 (OPTION B ONLY): CompositeAuthBackend",
+      "status": "pending",
+      "blockedBy": [5],
+      "description": "**DO NOT START without a recorded decision on the epic issue.** See the plan's OPEN DECISION.\n\n**Goal:** On macOS, prefer the native backend and fall back to desktop OAuth when the native class is absent.\n\n**Files:**\n- Create: addons/FoundryKit/auth/internal/CompositeAuthBackend.fs\n- Modify: addons/FoundryKit/auth/internal/AuthBackendFactory.fs\n- Modify: docs/superpowers/specs/2026-08-02-foundrykit-design.md (AMEND INVARIANT 6)\n- Modify: test_project/tests/auth-backend-factory.test.fs, test_project/tests/auth-composite-backend.test.fs\n\n**Acceptance Criteria:**\n- Delegates per provider to the first composed backend reporting is_available(provider)\n- Native present: macOS behaves exactly as today; assert the desktop path is never entered\n- Native absent: Google goes through desktop OAuth\n- Neither available: Unavailable, never an error\n- Invariant 6 amended in the spec - a missing binary is no longer indistinguishable from an unsupported platform. Amend honestly; do not leave the spec contradicting the code\n- A function returning a TRAIT type fails the runtime return check (#107) - assign to a trait-typed member\n\n**Verify:** task test:foundrylib && task test:scripts && task lint\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/internal/CompositeAuthBackend.fs\", \"docs/superpowers/specs/2026-08-02-foundrykit-design.md\"], \"verifyCommand\": \"task test:foundrylib && task test:scripts && task lint\", \"acceptanceCriteria\": [\"native-present path unchanged\", \"native-absent falls back\", \"invariant 6 amended in the spec\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-08-03"
+}
