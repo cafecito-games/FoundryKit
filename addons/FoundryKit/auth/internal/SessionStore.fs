@@ -356,7 +356,11 @@ func _session_from_body(response: AuthResponse, session: AuthSession) -> Session
 	if access_token.is_empty():
 		return SessionResult.Failure(AuthError.MissingField("access_token"))
 
-	# A backend that does not rotate refresh tokens omits it; the previous one is kept.
+	# A backend that does not rotate refresh tokens omits the field, and an explicit null
+	# says the same thing: RFC 6749 §5.1 makes refresh_token optional in a token response
+	# and gives no meaning to a null one, so both readings keep the previous token. Treating
+	# a null as a revocation instead would sign a player out against a backend that only
+	# meant "unchanged", and a backend that does revoke says so with a 401 the next time.
 	var refreshed_token: String = session.refresh_token
 	var raw_refresh_token: Variant = payload.get("refresh_token")
 	if raw_refresh_token != null:

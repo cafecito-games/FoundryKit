@@ -212,6 +212,20 @@ func test_a_refresh_keeps_the_previous_refresh_token_when_the_backend_omits_one(
 	await _store.refresh()
 	Expect.that(_store.refresh_token()).to_equal(_REFRESH_TOKEN)
 
+func test_an_explicit_null_refresh_token_reads_as_unchanged() -> void:
+	# RFC 6749 §5.1 makes refresh_token optional and gives no meaning to a null one, so a
+	# null reads exactly as an omission. Reading it as a revocation instead would sign a
+	# player out against a backend that only meant "unchanged"; one that does revoke says
+	# so with a 401 on the next refresh.
+	_store.set_session(_session("access-one", _REFRESH_TOKEN))
+	_transport.enqueue(HttpOutcome.Answered(200, _json({
+		"access_token": "access-two",
+		"refresh_token": null,
+	})))
+	var result: SessionResult = await _store.refresh()
+	Expect.that(_describe(result)).to_equal("ok:access-two")
+	Expect.that(_store.refresh_token()).to_equal(_REFRESH_TOKEN)
+
 func test_a_refresh_preserves_the_provider() -> void:
 	_store.set_session(_session("access-one", _REFRESH_TOKEN))
 	_transport.enqueue(HttpOutcome.Answered(200, _fresh_session_json()))
