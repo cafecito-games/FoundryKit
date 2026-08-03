@@ -10,6 +10,9 @@ uses Test
 ## exp = 1750000000
 const _TOKEN: String = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEyMyIsImV4cCI6MTc1MDAwMDAwMH0.sig"
 
+## exp = 0 — a token explicitly expired at the Unix epoch.
+const _TOKEN_EXP_ZERO: String = "eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjB9.sig"
+
 func _session() -> AuthSession:
 	var raw: Dictionary[String, Variant] = {"scope": "openid"}
 	var extras: Dictionary[String, Variant] = {"tenant": "acme"}
@@ -59,4 +62,20 @@ func test_token_without_expiry_never_expires() -> void:
 	var extras: Dictionary[String, Variant] = {}
 	var session: AuthSession = AuthSession.new("opaque", "refresh", Provider.GOOGLE, raw, extras)
 	Expect.that(session.expires_at()).to_equal(0)
+	Expect.that(session.is_expired_at(9999999999)).to_be_false()
+
+func test_session_with_explicit_zero_expiry_is_expired() -> void:
+	var raw: Dictionary[String, Variant] = {}
+	var extras: Dictionary[String, Variant] = {}
+	var session: AuthSession = AuthSession.new(_TOKEN_EXP_ZERO, "refresh", Provider.GOOGLE, raw, extras)
+	Expect.that(session.has_expiry()).to_be_true()
+	Expect.that(session.expires_at()).to_equal(0)
+	Expect.that(session.is_expired_at(1)).to_be_true()
+	Expect.that(session.is_expired_at(0)).to_be_true()
+
+func test_session_without_expiry_reports_no_expiry() -> void:
+	var raw: Dictionary[String, Variant] = {}
+	var extras: Dictionary[String, Variant] = {}
+	var session: AuthSession = AuthSession.new("opaque-token", "refresh", Provider.GOOGLE, raw, extras)
+	Expect.that(session.has_expiry()).to_be_false()
 	Expect.that(session.is_expired_at(9999999999)).to_be_false()
