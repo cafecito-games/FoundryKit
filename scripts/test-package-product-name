@@ -119,30 +119,44 @@ for extension in "${extensions[@]}"; do
 
     # Every platform that declares dependencies at all must declare the wrapper: an
     # extension that loads FoundryKitCore without it fails in dyld, not at parse time.
+    # A dictionary value may be written on one line or spread over several, so a block
+    # runs from the "=" that opens it to the first "}", however many lines that spans.
     platform=""
     block=""
+    blocks=0
     while IFS= read -r line || [ -n "$line" ]; do
+        if [ -z "$platform" ]; then
+            case "$line" in
+                '['*']'*) continue ;;
+                *'='*'{'*)
+                    platform="${line%%=*}"
+                    platform="${platform#"${platform%%[![:space:]]*}"}"
+                    platform="${platform%"${platform##*[![:space:]]}"}"
+                    block=""
+                    ;;
+                *) continue ;;
+            esac
+        fi
+        block="$block$line"
         case "$line" in
-            '['*']'*) platform="" ;;
-        esac
-        if [ -n "$platform" ]; then
-            block="$block$line"
-            if [ "$line" = "}" ]; then
+            *'}'*)
+                blocks=$((blocks + 1))
                 case "$block" in
                     *"/$name.framework\""* | *"/$name.xcframework\""*) ;;
                     *) fail "$relative declares dependencies for '$platform' without naming $name" ;;
                 esac
                 platform=""
-            fi
-            continue
-        fi
-        case "$line" in
-            *' = {')
-                platform="${line%% =*}"
-                block=""
                 ;;
         esac
     done < <(sed -n '/^\[dependencies\]/,/^\[/p' "$extension")
+
+    if [ -n "$platform" ]; then
+        fail "$relative has an unterminated dependency block for '$platform'"
+    fi
+
+    if [ "$blocks" -eq 0 ]; then
+        fail "$relative names $name but declares no platform dependency blocks"
+    fi
 
     if [ "$status" -eq 0 ]; then
         echo "  $relative -> $name"
