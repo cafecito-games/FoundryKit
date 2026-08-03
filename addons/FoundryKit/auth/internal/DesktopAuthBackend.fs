@@ -337,7 +337,14 @@ func _credential_from_token_response(
 		return CredentialResult.Failure(AuthError.InvalidResponse(
 				"the token response was not a JSON object"))
 	var payload: Dictionary = parser.data
-	var id_token: String = str(payload.get("id_token", ""))
+	# Read as a string rather than stringified. `{"id_token": 123}` is a malformed answer
+	# from the token endpoint, and coercing it would produce a credential carrying "123"
+	# that only fails later, at whichever backend tries to verify it.
+	var raw_id_token: Variant = payload.get("id_token", "")
+	if not (raw_id_token is String):
+		return CredentialResult.Failure(AuthError.InvalidResponse(
+				"the token response carried a non-string id_token"))
+	var id_token: String = raw_id_token
 	if id_token.is_empty():
 		return CredentialResult.Failure(AuthError.MissingField("id_token"))
 	return CredentialResult.Success(Credential.Google(

@@ -389,6 +389,17 @@ func test_a_token_response_without_an_id_token_reports_the_missing_field() -> vo
 
 ## A host with no browser to open cannot show a consent screen, so waiting out the
 ## watchdog for a callback nobody will send is the wrong answer.
+## Stringifying whatever arrives would turn `{"id_token": 123}` into a credential carrying
+## "123", which fails much later and somewhere else — at the backend that tries to verify
+## it. A token endpoint that answers with a non-string token has answered malformed.
+func test_a_non_string_id_token_reports_an_invalid_response() -> void:
+	_configure()
+	_transport.enqueue(HttpOutcome.Answered(
+			200, "{\"id_token\":123,\"token_type\":\"Bearer\"}".to_utf8_buffer()))
+	var pending: Coroutine[CredentialResult] = _backend.sign_in(Provider.GOOGLE)
+	await _deliver("code=auth-code&state=" + _state_sent().uri_encode())
+	Expect.that(_describe(await pending)).to_equal("fail:invalid_response")
+
 func test_a_browser_that_will_not_open_fails_promptly() -> void:
 	_configure()
 	_browser.opens = false
