@@ -16,6 +16,9 @@
 # rather than FoundrySwift.framework directly. Shipping FoundrySwift.framework alone does
 # not satisfy that load command, so the wrapper travels with the frameworks that need it.
 # Restructuring the upstream product would remove it — tracked as #81.
+#
+# Every slice of FoundryKitAuth.xcframework also carries the SwiftPM resource bundles of
+# the SDKs statically linked into it — see embed_resource_bundles below.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -67,7 +70,63 @@ create_xcframework() {
 	xcodebuild -create-xcframework "${arguments[@]}" -output "$output"
 }
 
+# GoogleSignIn, AppAuth, GTMAppAuth, GTMSessionFetcher, GoogleUtilities and Promises each
+# declare SwiftPM resources, so xcodebuild emits a <Package>_<Target>.bundle for each of
+# them beside the framework instead of inside it. Two things break if they stay there.
+#
+# 1. Resource lookup. Every one of those targets is linked *statically* into
+#    FoundryKitAuth, so at runtime their classes belong to FoundryKitAuth.framework and
+#    that is the bundle they search. GoogleSignIn does it by hand in
+#    NSBundle+GID3PAdditions.m:
+#
+#      [[NSBundle bundleForClass:[GIDSignIn class]] pathForResource:@"GoogleSignIn_GoogleSignIn"
+#                                                            ofType:@"bundle"]
+#
+#    and the SwiftPM-generated accessors the other targets use try the same bundle's
+#    resource URL. -pathForResource: searches the bundle's *resource* directory, which is
+#    Versions/A/Resources for a versioned macOS framework and the bundle root for a
+#    shallow iOS one.
+# 2. Privacy manifests. Those bundles are where each SDK's PrivacyInfo.xcprivacy lives.
+#    An app embedding the auth extension without them is missing required manifests for
+#    SDKs its binary demonstrably contains, which App Store submission rejects.
+#
+# Copying them into the framework's own resource directory answers both, and is what
+# Xcode's copy-resources phase does when a package product is embedded in an app.
+embed_resource_bundles() {
+	local platform_directory=$1
+	local framework="$products/$platform_directory/FoundryKitAuth.framework"
+	local resources bundle count=0
+
+	if [[ -d "$framework/Versions/Current/Resources" ]]; then
+		resources="$framework/Versions/Current/Resources"
+	else
+		resources="$framework"
+	fi
+
+	# Drop what an earlier run embedded, so a dependency that stops shipping a bundle
+	# does not linger in the published framework.
+	find "$resources" -maxdepth 1 -name '*.bundle' -exec rm -rf {} +
+
+	for bundle in "$products/$platform_directory"/*.bundle; do
+		[[ -d "$bundle" ]] || continue
+		cp -R "$bundle" "$resources/"
+		count=$((count + 1))
+	done
+
+	# The GoogleSignIn bundle is the one with non-manifest resources — strings and the
+	# Roboto font the sign-in button draws with — so its absence is a hard failure
+	# rather than a missing privacy manifest.
+	[[ -d "$resources/GoogleSignIn_GoogleSignIn.bundle" ]] ||
+		apple_fail "no GoogleSignIn resource bundle in $products/$platform_directory"
+
+	echo "embedded $count resource bundles in $platform_directory/FoundryKitAuth.framework"
+}
+
 mkdir -p "$auth_bin" "$core_bin"
+
+for platform_directory in "${platform_directories[@]}"; do
+	embed_resource_bundles "$platform_directory"
+done
 
 create_xcframework FoundryKitAuth "$auth_bin/FoundryKitAuth.xcframework"
 create_xcframework FoundryKitCore "$core_bin/FoundryKitCore.xcframework"
