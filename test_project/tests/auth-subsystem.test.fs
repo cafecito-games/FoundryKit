@@ -498,6 +498,48 @@ func test_refresh_session_is_abandoned_when_the_session_is_replaced_mid_refresh(
 	Expect.that(_describe_session(await pending)).to_equal("fail:session_expired:0")
 	Expect.that(_subsystem.access_token()).to_equal("access-b")
 
+func test_a_refused_replay_does_not_end_a_session_whose_token_rotated_since() -> void:
+	# The replay's token was rotated while it was on the wire, so its refusal says nothing
+	# about the successor now held. Ending the session over it would sign out a player whose
+	# current credential works.
+	var transport: SuspendingTransport = SuspendingTransport.new(_transport)
+	var subsystem: AuthSubsystem = AuthSubsystem.new(_log, transport, _config, _backend)
+	_backend.restore_result = SessionResult.Success(_session("access-one", "refresh-one"))
+	await subsystem.restore_session()
+
+	_transport.enqueue(HttpOutcome.Answered(401, PackedByteArray()))
+	_transport.enqueue(HttpOutcome.Answered(200, _fresh_session_json()))
+	_transport.enqueue(HttpOutcome.Answered(200, _json({
+		"access_token": "second-fresh-access-token",
+		"refresh_token": "second-fresh-refresh-token",
+	})))
+	_transport.enqueue(HttpOutcome.Answered(401, PackedByteArray()))
+	transport.suspend_on_send = 3
+	var pending: Coroutine[ResponseResult] = subsystem.request(HttpMethod.GET, "/me", null)
+
+	await transport.parked
+	await subsystem.refresh_session()
+	transport.release()
+
+	Expect.that(_describe_response(await pending)).to_equal("fail:session_expired")
+	Expect.that(subsystem.has_session()).to_be_true()
+	Expect.that(subsystem.access_token()).to_equal("second-fresh-access-token")
+
+func test_a_restore_completing_after_a_sign_in_started_does_not_win() -> void:
+	# The keychain read was already outstanding when the player chose an account. Letting the
+	# stored one land afterwards leaves the wrong player signed in and throws away the
+	# sign-in that was explicitly asked for.
+	_backend.restore_result = SessionResult.Success(_session("restored-token", _REFRESH_TOKEN))
+	_backend.credential_result = CredentialResult.Success(_google_credential())
+	_backend.suspends = true
+	var restoring: Coroutine[SessionResult] = _subsystem.restore_session()
+	var signing_in: Coroutine[SessionResult] = _subsystem.sign_in(Provider.GOOGLE)
+	_transport.enqueue(HttpOutcome.Answered(200, _issued_session_json()))
+	_backend.release()
+	Expect.that(_describe_session(await restoring)).to_equal("fail:cancelled")
+	Expect.that(_describe_session(await signing_in)).to_equal("ok:issued-access-token")
+	Expect.that(_subsystem.access_token()).to_equal("issued-access-token")
+
 func test_a_refused_replay_leaves_a_session_installed_since_alone() -> void:
 	# The replay was authorized as one player and refused. Ending "the" session at that point
 	# ends whoever signed in while it was on the wire, whose own credential was never refused.
@@ -740,9 +782,13 @@ class SuspendingTransport extends RefCounted uses HttpTransport:
 	signal _released()
 
 	## The 1-based ordinal of the send to park. Zero parks nothing.
+	##
+	## Only ever parks once, so a test can drive further requests through while the chosen one
+	## is suspended.
 	var suspend_on_send: int = 0
 
 	var _inner: FakeHttpClient
+	var _has_parked: bool = false
 
 	func _init(inner: FakeHttpClient) -> void:
 		_inner = inner
@@ -758,7 +804,8 @@ class SuspendingTransport extends RefCounted uses HttpTransport:
 			headers: PackedStringArray,
 			body: PackedByteArray,
 			timeout_seconds: float) -> HttpOutcome:
-		if _inner.send_count + 1 == suspend_on_send:
+		if not _has_parked and _inner.send_count + 1 == suspend_on_send:
+			_has_parked = true
 			parked.emit.call_deferred()
 			await _released
 		return await _inner.send(method, url, headers, body, timeout_seconds)

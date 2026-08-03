@@ -99,6 +99,17 @@ var _lapse_announced: bool = true
 ## tell that the session it was authorized under is no longer the one held.
 var _session_generation: int = 0
 
+## Counts sign-in attempts, so a restore that began earlier can tell that the game has since
+## asked to sign in explicitly.
+##
+## A sign-in outranks a restore: it names the account the player wants, while a restore only
+## reports the one that happened to be stored. Without this, a slow secure-storage read
+## completing after an explicit sign-in leaves the stored account active and discards the
+## chosen one. Deliberately separate from [member _session_generation], which no sign-in
+## advances until it actually installs a session — a sign-in the player then cancels must not
+## abandon the requests that were in flight when it opened.
+var _sign_in_generation: int = 0
+
 ## The Google web client ID the exchange presents as the credential's audience.
 ##
 ## Learned from [method configure]; see [method _resolved_audience] for why the exchange,
@@ -167,11 +178,13 @@ func is_configured(provider: Provider) -> bool:
 ## sign-in that lands while the player is still in front of the native sheet is not undone
 ## by the session this flow eventually produces.
 async func sign_in(provider: Provider) -> SessionResult:
+	_sign_in_generation += 1
 	var generation: int = _session_generation
 	return await _exchange(await _backend.sign_in(provider), generation)
 
 ## Attempts sign-in without UI and exchanges the credential it produces.
 async func sign_in_silent(provider: Provider) -> SessionResult:
+	_sign_in_generation += 1
 	var generation: int = _session_generation
 	return await _exchange(await _backend.sign_in_silent(provider), generation)
 
@@ -231,15 +244,18 @@ async func refresh_session() -> SessionResult:
 ##
 ## A restore that completes after an explicit sign-out is discarded rather than installed:
 ## secure storage can take arbitrarily long, and reinstating a session the player has since
-## ended would sign them back in behind their back.
+## ended would sign them back in behind their back. A restore that completes after a sign-in
+## has started is discarded for the same reason: the player named an account, and the stored
+## one is not it.
 async func restore_session() -> SessionResult:
 	var generation: int = _session_generation
+	var sign_in_generation: int = _sign_in_generation
 	var result: SessionResult = await _backend.restore_session()
 	match result:
 		SessionResult.Failure(_error):
 			return result
 		SessionResult.Success(session):
-			if _session_replaced_since(generation):
+			if _session_replaced_since(generation) or sign_in_generation != _sign_in_generation:
 				return _superseded()
 			_install(session)
 			return result
@@ -279,9 +295,10 @@ async func request(method: HttpMethod, path: String, body: Variant) -> ResponseR
 		SessionResult.Success(_session):
 			if _session_replaced_since(generation):
 				return _replaced_mid_request()
+			var rotations: int = _store.rotation_count()
 			var retried: ResponseResult = await _client.request(
 					method, path, body, _store.access_token())
-			return _result_of_retry(retried, generation)
+			return _result_of_retry(retried, generation, rotations)
 	return ResponseResult.Failure(AuthError.InvalidResponse(
 			"the session store reported a result this subsystem does not understand"))
 
@@ -345,13 +362,21 @@ func _replaced_mid_request() -> ResponseResult:
 
 ## Returns what a replayed request resolves to.
 ##
-## The only case this changes is a second refusal, which ends the session — and only when
-## the session it refused is still the one held. A reply that arrives after an explicit
+## The only case this changes is a second refusal, which ends the session — and only when the
+## credential it refused is still the one held, in both senses: the session has not been
+## replaced, and the token has not been rotated out from under the replay. A reply that arrives after an explicit
 ## sign-in or sign-out refused a credential that no longer matters. Everything else is the
 ## backend's own answer and is passed through untouched.
-func _result_of_retry(retried: ResponseResult, generation: int) -> ResponseResult:
+func _result_of_retry(
+		retried: ResponseResult, generation: int, rotations: int) -> ResponseResult:
 	if not _is_refused(retried):
 		return retried
+	if _store.rotation_count() != rotations:
+		# The token this replay presented was rotated while it was on the wire. A refusal of a
+		# superseded token says nothing about the successor now held, and ending the session
+		# over it would sign out a player holding a credential that still works.
+		_log.debug("ignoring a refusal of a token that has since been rotated")
+		return ResponseResult.Failure(AuthError.SessionExpired(_current_expiry()))
 	if _session_replaced_since(generation):
 		# The refusal belongs to the session this request was authorized under, which is no
 		# longer the one held. Clearing now would end the session that replaced it — signing
