@@ -19,9 +19,12 @@ func test_apple_platforms_resolve_to_the_apple_backend() -> void:
 		var backend: AuthBackend = _factory.resolve(platform)
 		Expect.that(backend.backend_name()).to_equal("apple")
 
+func test_desktop_platform_resolves_to_the_desktop_backend() -> void:
+	var backend: AuthBackend = _factory.resolve(PlatformKind.DESKTOP)
+	Expect.that(backend.backend_name()).to_equal("desktop")
+
 func test_other_platforms_still_resolve_to_null() -> void:
-	for platform: PlatformKind in [PlatformKind.ANDROID, PlatformKind.DESKTOP,
-			PlatformKind.UNKNOWN]:
+	for platform: PlatformKind in [PlatformKind.ANDROID, PlatformKind.UNKNOWN]:
 		var backend: AuthBackend = _factory.resolve(platform)
 		Expect.that(backend.backend_name()).to_equal("null")
 
