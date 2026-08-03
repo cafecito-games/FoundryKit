@@ -24,6 +24,14 @@ uses HttpTransport
 ## Bounds the whole attempt when a caller does not supply its own timeout.
 const DEFAULT_TIMEOUT_SECONDS: float = 30.0
 
+## The largest response body accepted, in bytes.
+##
+## [HTTPRequest] buffers the whole body in memory and accepts gzip, so without a cap a
+## host could answer a small compressed stream that expands to gigabytes and exhaust the
+## process before the watchdog ever fires. Eight mebibytes is far beyond any API response
+## FoundryKit expects; a larger one is refused as [code]TransportFailed[/code].
+const MAX_RESPONSE_BYTES: int = 8 * 1024 * 1024
+
 ## Keeps every client with a suspended [method send] alive independent of its caller.
 ##
 ## A caller typically discards its local variable once it holds the returned [Coroutine] —
@@ -114,6 +122,7 @@ class _PendingRequest extends RefCounted:
 		# as the status it is, and the caller decides whether the new location is one it
 		# trusts.
 		node.max_redirects = 0
+		node.body_size_limit = MAX_RESPONSE_BYTES
 		node.request_completed.connect(_on_request_completed)
 
 		# The watchdog bounds a network call, not game simulation — it must keep running
@@ -237,4 +246,6 @@ class _PendingRequest extends RefCounted:
 				return "the host closed the connection without responding"
 			HTTPRequest.RESULT_REDIRECT_LIMIT_REACHED:
 				return "the host redirected the request, which is not followed"
+			HTTPRequest.RESULT_BODY_SIZE_LIMIT_EXCEEDED:
+				return "the response body exceeded %d bytes" % MAX_RESPONSE_BYTES
 		return "the request failed (%d)" % result
