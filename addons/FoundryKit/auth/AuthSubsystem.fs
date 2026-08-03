@@ -259,14 +259,51 @@ async func sign_in_silent(provider: Provider) -> SessionResult:
 	return await _exchange(
 			await _backend.sign_in_silent(provider), generation, backend_generation)
 
-## Signs out of the native provider and drops the session.
+## Revokes the session at the backend, signs out of the native provider, and drops it.
 ##
 ## The session is dropped first and unconditionally: a native sign-out that fails does not
 ## make the session usable again, and leaving it held would report a signed-out player as
 ## signed in.
+##
+## [b]The revoke is what makes a sign-out mean anything at the backend.[/b] Dropping the
+## session locally leaves the refresh token it carried live, so a stale copy on disk, on a
+## shared device, or in an attacker's hands goes on minting access tokens indefinitely. The
+## token is therefore posted to [member BackendConfig.sign_out_path] — the endpoint
+## [BackendConfig] has always named and nothing has ever called.
+##
+## [b]A revoke that fails does not fail the sign-out.[/b] The player asked to sign out and
+## the local session is already gone; there is no state a reported failure would let them
+## return to, and it would show an error to a player who is signed out either way while
+## inviting a retry with no session left to present. The failure is logged, and the result
+## stays what the native provider said, exactly as before. That also keeps an offline
+## sign-out working: a player on a plane can still leave their account, and the token is
+## retired by its own expiry rather than by a call that could never have been made.
+##
+## [b]The revoke is awaited, not fired and forgotten.[/b] Sign-out is very often the last
+## thing a session does before the game quits, and an unawaited request outstanding at that
+## moment simply never lands — which is the one case the revoke exists for. The cost is one
+## round trip on a call the player is already waiting on.
+##
+## [b]It runs after the native sign-out, not before.[/b] The native call is what clears the
+## provider's own credentials, and it is destructive to whatever account is signed in when
+## it runs. Putting a network round trip in front of it would widen the window in which a
+## sign-in can complete first, leaving the player natively signed out of the account they
+## just chose. Ordering the revoke second leaves that window exactly the length it has
+## always been.
+##
+## [b]It revokes the session being discarded and no other.[/b] The token travels by value,
+## read before [method _forget] and never re-read, so a session installed while the sign-out
+## is running cannot be substituted for it — and nothing here writes to the store after
+## [method _forget], so such a session is not ended either. What running second does need is
+## the backend generation, because [method configure_backend] can land during the native
+## call: see [method _revoke].
 async func sign_out(provider: Provider) -> CompletionResult:
+	var discarded: AuthSession? = _store.session()
+	var backend_generation: int = _backend_generation
 	_forget()
-	return await _backend.sign_out(provider)
+	var native: CompletionResult = await _backend.sign_out(provider)
+	var _was_revoked: bool = await _revoke(discarded, backend_generation)
+	return native
 
 func has_session() -> bool:
 	return _store.has_session()
@@ -682,6 +719,69 @@ func _current_expiry() -> int:
 		return 0
 	var active: AuthSession = current
 	return active.expires_at()
+
+## Asks the backend to retire the refresh token [param discarded] carried, and returns
+## whether it did.
+##
+## Returns without touching the transport when there is nothing to ask for: no backend
+## configured, no session to discard, or a session carrying no refresh token. A post in any
+## of those cases would either have nowhere to go or would carry an empty credential the
+## backend can only refuse.
+##
+## [param backend_generation] is the generation the sign-out began under, and a mismatch
+## abandons the revoke. The native sign-out this runs after can take arbitrarily long, and
+## [method configure_backend] can land inside it. A refresh token issued by one backend is
+## not a credential at another: posting it to the replacement would disclose the first
+## service's credential to the second, and unlike every other guard here that cannot be
+## undone afterwards. Leaving the old token to expire on its own is the lesser harm, and it
+## matches [method _exchange_credential], which refuses to disclose a credential across a
+## move for the same reason.
+##
+## The request presents no bearer credential, matching the refresh endpoint. A sign-out is
+## most often asked for after a long absence, when the access token has already expired, so
+## authorizing the revoke with it would earn a 401 in precisely the case revocation matters
+## most. The refresh token in the body is the credential being retired and identifies itself.
+##
+## The caller ignores the return value; it exists so the outcome is stated rather than
+## discarded silently, and so a test can distinguish "revoked" from "not attempted".
+async func _revoke(discarded: AuthSession?, backend_generation: int) -> bool:
+	if backend_generation != _backend_generation:
+		_log.debug("not revoking a token at a backend configured since the sign-out began")
+		return false
+	if not _is_backend_configured():
+		return false
+	var session: AuthSession? = discarded
+	if session == null:
+		return false
+	var ending: AuthSession = session
+	if ending.refresh_token.is_empty():
+		_log.debug("not revoking a session that carries no refresh token")
+		return false
+	var body: Dictionary[String, Variant] = {"refresh_token": ending.refresh_token}
+	var response: ResponseResult = await _client.request(
+			HttpMethod.POST, _client.config().sign_out_path, body)
+	return _is_revoked(response)
+
+## Returns whether the backend reported the token retired, logging it when it did not.
+##
+## A 401 counts as revoked: [BackendClient] reports it as a success carrying
+## [member AuthResponse.session_expired], and a backend that no longer accepts the refresh
+## token is already in the state the revoke was asking for. Anything else is a revoke that
+## did not happen — worth a log line, and nothing more, because [method sign_out] does not
+## fail over it.
+##
+## Exhaustive over [ResponseResult]; the trailing return exists only because the analyser
+## cannot see that the match is total.
+func _is_revoked(response: ResponseResult) -> bool:
+	match response:
+		ResponseResult.Success(answer):
+			if answer.session_expired:
+				_log.debug("the backend had already retired the refresh token being revoked")
+			return true
+		ResponseResult.Failure(_error):
+			_log.debug("could not revoke the session at the backend; signing out anyway")
+			return false
+	return false
 
 ## Returns whether the backend refused the credential a request presented.
 ##

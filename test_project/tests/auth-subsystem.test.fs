@@ -438,7 +438,9 @@ func test_a_refresh_after_signing_out_announces_nothing() -> void:
 	await _subsystem.sign_out(Provider.GOOGLE)
 	await _subsystem.refresh_session()
 	Expect.that(_session_expired_count).to_equal(0)
-	Expect.that(_transport.send_count).to_equal(0)
+	# The one send is the sign-out's revoke. The refresh that followed found no session and
+	# made no call of its own.
+	Expect.that(_transport.send_count).to_equal(1)
 
 func test_clearing_the_session_announces_nothing() -> void:
 	await _install_session("access-one", _REFRESH_TOKEN)
@@ -678,6 +680,139 @@ func test_a_refused_request_is_not_replayed_against_a_backend_moved_under_it() -
 	Expect.that(_transport.send_count).to_equal(1)
 	Expect.that(subsystem.has_session()).to_be_false()
 
+# --- Backend sign-out -------------------------------------------------------------------
+
+func test_signing_out_revokes_the_session_at_the_backend() -> void:
+	# The whole point of the fix: without this post the backend's refresh token outlives the
+	# sign-out, and anyone still holding a copy of it can go on minting access tokens.
+	await _install_session("access-one", _REFRESH_TOKEN)
+	_transport.enqueue(HttpOutcome.Answered(200, "{}".to_utf8_buffer()))
+	await _subsystem.sign_out(Provider.GOOGLE)
+	Expect.that(_transport.send_count).to_equal(1)
+	Expect.that(_transport.last_method).to_equal("POST")
+	Expect.that(_transport.last_url).to_equal(_config.url_for(_config.sign_out_path))
+	Expect.that(_transport.last_body.get_string_from_utf8()).to_equal(
+			"{\"refresh_token\":\"%s\"}" % _REFRESH_TOKEN)
+
+func test_the_revoke_carries_no_authorization_header() -> void:
+	# A sign-out is most often asked for after a long absence, when the access token has
+	# already expired. Presenting it would earn a 401 exactly when revocation matters most.
+	# The refresh token in the body is the credential being revoked and authenticates itself.
+	await _install_session(_EXPIRED_TOKEN, _REFRESH_TOKEN)
+	_transport.enqueue(HttpOutcome.Answered(200, "{}".to_utf8_buffer()))
+	await _subsystem.sign_out(Provider.GOOGLE)
+	Expect.that(_carries_authorization(_transport.last_headers)).to_be_false()
+
+func test_signing_out_with_no_session_makes_no_revoke_request() -> void:
+	await _subsystem.sign_out(Provider.GOOGLE)
+	Expect.that(_transport.send_count).to_equal(0)
+	Expect.that(_backend.sign_out_count).to_equal(1)
+
+func test_signing_out_a_session_with_no_refresh_token_makes_no_revoke_request() -> void:
+	# There is no credential to revoke, so a post would carry an empty one and be refused.
+	await _install_session("access-one", "")
+	await _subsystem.sign_out(Provider.GOOGLE)
+	Expect.that(_transport.send_count).to_equal(0)
+	Expect.that(_backend.sign_out_count).to_equal(1)
+
+func test_an_unconfigured_sign_out_makes_no_revoke_request() -> void:
+	# With no backend configured there is nowhere to revoke, and sign-out must behave exactly
+	# as it did before the revoke existed.
+	var subsystem: AuthSubsystem = AuthSubsystem.new(
+			_log, _transport, BackendConfig.new(), _backend)
+	_backend.restore_result = SessionResult.Success(_session("access-one", _REFRESH_TOKEN))
+	await subsystem.restore_session()
+	var result: CompletionResult = await subsystem.sign_out(Provider.GOOGLE)
+	Expect.that(_describe_completion(result)).to_equal("ok")
+	Expect.that(_transport.send_count).to_equal(0)
+	Expect.that(subsystem.has_session()).to_be_false()
+
+func test_an_unreachable_revoke_still_reports_a_successful_sign_out() -> void:
+	# The player asked to sign out and the local session is already gone. Reporting a failure
+	# would show an error to a player who is signed out either way.
+	await _install_session("access-one", _REFRESH_TOKEN)
+	_transport.enqueue(HttpOutcome.TransportFailed("could not resolve the host name"))
+	var result: CompletionResult = await _subsystem.sign_out(Provider.GOOGLE)
+	Expect.that(_describe_completion(result)).to_equal("ok")
+	Expect.that(_transport.send_count).to_equal(1)
+	Expect.that(_backend.sign_out_count).to_equal(1)
+	Expect.that(_subsystem.has_session()).to_be_false()
+
+func test_a_refused_revoke_still_reports_a_successful_sign_out() -> void:
+	# A 401 says the backend had already retired the token, which is the state the revoke was
+	# asking for. It is not an expiry to announce and not a sign-out failure.
+	await _install_session("access-one", _REFRESH_TOKEN)
+	_transport.enqueue(HttpOutcome.Answered(401, PackedByteArray()))
+	var result: CompletionResult = await _subsystem.sign_out(Provider.GOOGLE)
+	Expect.that(_describe_completion(result)).to_equal("ok")
+	Expect.that(_transport.send_count).to_equal(1)
+	Expect.that(_session_expired_count).to_equal(0)
+
+func test_a_revoke_carries_the_token_of_the_session_being_discarded() -> void:
+	# A sign-in landing while the revoke is on the wire installs a session of its own. The
+	# revoke must retire the token it was asked to retire and leave the newcomer's alone —
+	# revoking that one would sign out the player who just signed in.
+	var transport: SuspendingTransport = SuspendingTransport.new(_transport)
+	var subsystem: AuthSubsystem = AuthSubsystem.new(_log, transport, _config, _backend)
+	_backend.restore_result = SessionResult.Success(_session("access-a", "refresh-a"))
+	await subsystem.restore_session()
+
+	_transport.enqueue(HttpOutcome.Answered(200, "{}".to_utf8_buffer()))
+	transport.suspend_on_send = 1
+	var pending: Coroutine[CompletionResult] = subsystem.sign_out(Provider.GOOGLE)
+
+	await transport.parked
+	_backend.restore_result = SessionResult.Success(_session("access-b", "refresh-b"))
+	await subsystem.restore_session()
+	transport.release()
+
+	Expect.that(_describe_completion(await pending)).to_equal("ok")
+	Expect.that(_transport.send_count).to_equal(1)
+	Expect.that(_transport.last_body.get_string_from_utf8()).to_equal(
+			"{\"refresh_token\":\"refresh-a\"}")
+	# And nothing after the revoke writes to the store, so the session installed since stands.
+	Expect.that(subsystem.has_session()).to_be_true()
+	Expect.that(subsystem.access_token()).to_equal("access-b")
+
+func test_a_revoke_is_abandoned_when_the_backend_moved_during_the_native_sign_out() -> void:
+	# The native sign-out takes arbitrarily long and configure_backend can land inside it. The
+	# refresh token was issued by the original backend and is not a credential at the new one:
+	# posting it there would hand a second service the first one's secret, and no later guard
+	# can take that back.
+	await _install_session("access-one", _REFRESH_TOKEN)
+	_transport.enqueue(HttpOutcome.Answered(200, "{}".to_utf8_buffer()))
+	_backend.sign_out_suspends = true
+	var pending: Coroutine[CompletionResult] = _subsystem.sign_out(Provider.GOOGLE)
+
+	await _backend.sign_out_parked
+	_subsystem.configure_backend(BackendConfig.new("https://other.example.com"))
+	_backend.release()
+
+	Expect.that(_describe_completion(await pending)).to_equal("ok")
+	Expect.that(_transport.send_count).to_equal(0)
+
+func test_the_native_sign_out_completes_before_the_revoke_reaches_the_wire() -> void:
+	# The native call clears the provider's own credentials and is destructive to whoever is
+	# signed in when it runs, so it must not be delayed by a network round trip: a sign-in
+	# completing in a widened window would leave the player natively signed out of the account
+	# they just chose. Ordering the revoke second keeps that window its original length.
+	var transport: SuspendingTransport = SuspendingTransport.new(_transport)
+	var subsystem: AuthSubsystem = AuthSubsystem.new(_log, transport, _config, _backend)
+	_backend.restore_result = SessionResult.Success(_session("access-one", _REFRESH_TOKEN))
+	await subsystem.restore_session()
+
+	_transport.enqueue(HttpOutcome.Answered(200, "{}".to_utf8_buffer()))
+	transport.suspend_on_send = 1
+	var pending: Coroutine[CompletionResult] = subsystem.sign_out(Provider.GOOGLE)
+
+	await transport.parked
+	# The revoke is parked on the wire and the native sign-out has already been made.
+	Expect.that(_backend.sign_out_count).to_equal(1)
+	transport.release()
+
+	Expect.that(_describe_completion(await pending)).to_equal("ok")
+	Expect.that(_transport.send_count).to_equal(1)
+
 # --- Storage delegation -----------------------------------------------------------------
 
 func test_restore_session_installs_what_the_backend_returned() -> void:
@@ -820,6 +955,14 @@ func _describe_token(result: TokenResult) -> String:
 			return "fail:" + _describe_error(error)
 	return "unreachable"
 
+func _describe_completion(result: CompletionResult) -> String:
+	match result:
+		CompletionResult.Success:
+			return "ok"
+		CompletionResult.Failure(error):
+			return "fail:" + _error_name(error)
+	return "unreachable"
+
 func _describe_response(result: ResponseResult) -> String:
 	match result:
 		ResponseResult.Success(response):
@@ -907,6 +1050,10 @@ class FakeAuthBackend extends RefCounted uses AuthBackend:
 	## What the next [method restore_session] resolves with.
 	var restore_result: SessionResult = SessionResult.Failure(AuthError.Storage("nothing stored"))
 
+	## Emitted once a parked native sign-out has suspended, so a test knows it is inside the
+	## native call rather than merely past it.
+	signal sign_out_parked()
+
 	var sign_out_count: int = 0
 	var clear_count: int = 0
 
@@ -915,6 +1062,12 @@ class FakeAuthBackend extends RefCounted uses AuthBackend:
 	## Native sheets and secure storage take arbitrarily long in production; this is what
 	## lets a test land a sign-out in the middle of one.
 	var suspends: bool = false
+
+	## When true, the native sign-out parks until [method release] is called.
+	##
+	## Deliberately separate from [member suspends]: the tests that park a sign-in also call
+	## sign-out to interrupt it, and one flag covering both would park the interruption too.
+	var sign_out_suspends: bool = false
 
 	signal _released()
 
@@ -944,6 +1097,9 @@ class FakeAuthBackend extends RefCounted uses AuthBackend:
 
 	async func sign_out(_provider: Provider) -> CompletionResult:
 		sign_out_count += 1
+		if sign_out_suspends:
+			sign_out_parked.emit.call_deferred()
+			await _released
 		return CompletionResult.Success
 
 	async func store_session(_session: AuthSession) -> CompletionResult:
