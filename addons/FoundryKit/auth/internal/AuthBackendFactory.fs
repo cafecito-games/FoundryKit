@@ -5,8 +5,14 @@ import games.cafecito.foundrykit.core
 ## Selects the authentication backend for a platform.
 ##
 ## Supplies only the two requirements [BackendFactory] declares; the shared fallback rule
-## in `resolve()` does the rest. Returning null from [method for_platform] covers both an
-## unsupported platform and a removed binary — deliberately the same path.
+## in `resolve()` does the rest. Returning null from [method for_platform] covers a platform
+## with no native sign-in stack.
+##
+## A removed binary reaches the same observable state by a different route: a platform
+## backend that finds its native class absent reports every provider unavailable and fails
+## every operation with [code]AuthError.Unavailable[/code], exactly as the Null backend
+## does. Selection therefore never probes for binaries, and a partial install is
+## indistinguishable from an unsupported platform to a caller.
 class_name AuthBackendFactory extends RefCounted
 uses BackendFactory[AuthBackend]
 
