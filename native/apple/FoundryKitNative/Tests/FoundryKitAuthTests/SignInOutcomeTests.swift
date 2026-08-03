@@ -21,6 +21,24 @@ final class SignInOutcomeTests: XCTestCase {
             "com.googleusercontent.apps.123-abc")
     }
 
+    func testCallbackURLSchemeIsRecognisedRegardlessOfCase() {
+        XCTAssertTrue(
+            hasCallbackURLScheme(
+                iosClientID: "123-abc.apps.googleusercontent.com",
+                urlSchemes: ["myGame", "COM.GOOGLEUSERCONTENT.APPS.123-ABC"]))
+    }
+
+    func testMissingCallbackURLSchemeIsRejected() {
+        XCTAssertFalse(
+            hasCallbackURLScheme(
+                iosClientID: "123-abc.apps.googleusercontent.com",
+                urlSchemes: []))
+        XCTAssertFalse(
+            hasCallbackURLScheme(
+                iosClientID: "123-abc.apps.googleusercontent.com",
+                urlSchemes: ["com.googleusercontent.apps.999-zzz"]))
+    }
+
     func testOutcomeCarriesTokenAndProfile() {
         let outcome = SignInOutcome.success(
             idToken: "id", email: "a@b.c", displayName: "Ada")

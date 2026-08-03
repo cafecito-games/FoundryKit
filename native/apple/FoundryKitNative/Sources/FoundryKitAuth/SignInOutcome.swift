@@ -61,3 +61,17 @@ func validatedClientID(_ raw: String?) -> String? {
 func reversedClientID(_ iosClientID: String) -> String {
     iosClientID.split(separator: ".").reversed().joined(separator: ".")
 }
+
+/// Returns whether `urlSchemes` declares the reversed client ID that GoogleSignIn needs
+/// in order to receive the OAuth callback.
+///
+/// Without it the SDK raises an Objective-C exception the moment interactive sign-in
+/// starts, which no Swift `catch` can intercept. Checking up front turns a host
+/// misconfiguration into `isAvailable() == false`, which is what the addon promises for
+/// anything it cannot do.
+///
+/// URL schemes are case-insensitive, so the comparison is too.
+func hasCallbackURLScheme(iosClientID: String, urlSchemes: [String]) -> Bool {
+    let expected = reversedClientID(iosClientID).lowercased()
+    return urlSchemes.contains { $0.lowercased() == expected }
+}

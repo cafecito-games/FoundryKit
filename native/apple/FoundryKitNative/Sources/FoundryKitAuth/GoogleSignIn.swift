@@ -44,12 +44,14 @@ class iOSGoogleSignIn: RefCounted {
     /// `Info.plist` (`GIDClientID`); `webClientId` becomes the `serverClientID` so the
     /// returned ID token is minted for the game's backend.
     ///
-    /// An empty `webClientId` or a missing `GIDClientID` leaves the extension
-    /// unconfigured, so `isAvailable()` reports false and no sign-in is attempted.
+    /// An empty `webClientId`, a missing `GIDClientID`, or a host that does not declare
+    /// the reversed-client-ID URL scheme leaves the extension unconfigured, so
+    /// `isAvailable()` reports false and no sign-in is attempted.
     @Callable
     func initialize(webClientId: String) {
         guard let iosClientID = validatedClientID(Self.infoPlistClientID()),
-            !webClientId.isEmpty
+            !webClientId.isEmpty,
+            hasCallbackURLScheme(iosClientID: iosClientID, urlSchemes: Self.infoPlistURLSchemes())
         else {
             isConfigured = false
             Self.logger.error("Google Sign-In is not configured; sign-in is unavailable.")
@@ -126,6 +128,14 @@ class iOSGoogleSignIn: RefCounted {
 
     private static func infoPlistClientID() -> String? {
         Bundle.main.object(forInfoDictionaryKey: "GIDClientID") as? String
+    }
+
+    private static func infoPlistURLSchemes() -> [String] {
+        let urlTypes = Bundle.main.object(forInfoDictionaryKey: "CFBundleURLTypes")
+        guard let urlTypes = urlTypes as? [[String: Any]] else {
+            return []
+        }
+        return urlTypes.flatMap { $0["CFBundleURLSchemes"] as? [String] ?? [] }
     }
 
     #if canImport(UIKit)
