@@ -21,13 +21,24 @@ import games.cafecito.foundrykit.core
 ## the refresh rather than as a loop with a counter, so the bound is structural: there is
 ## no counter to get wrong and no path back to the first attempt.
 ##
-## [b]A call never answers for a session it did not begin under.[/b] Native sheets, secure
-## storage and the network all take arbitrarily long, and a player can sign in again or sign
-## out while any of them is outstanding. Every call that spans an await takes the session
-## generation first and checks it before handing anything back — see
-## [method _session_replaced_since]. Without that, a sign-in completing after a sign-out
-## reinstates the session the player just ended, and a request or a token call made for one
-## account returns, or executes under, whoever signed in since.
+## [b]A call never uses, hands out, or destroys a session it did not begin under.[/b] Native
+## sheets, secure storage and the network all take arbitrarily long, and a player can sign in
+## again or sign out while any of them is outstanding. Every call that spans an await takes
+## the session generation first and checks it — see [method _session_replaced_since] — so
+## that across a replacement:
+##
+## - no request is ever authorized with a token from a session it did not begin under, and no
+##   completed sign-in or restore reinstates a session an explicit sign-out has ended;
+## - no session, token or credential belonging to one sign-in is handed to a caller that
+##   asked during another;
+## - no session is ended because a different session's credential was refused.
+##
+## What it deliberately does not do is withhold a reply the backend already produced. A
+## response fetched with one session's token is that session's data, and it is returned to
+## the one caller that asked for it — [method request] is a return value, not a write into
+## any shared state. Reporting a completed request as expired instead would tell the caller a
+## mutation it already performed had failed, and would invite it to perform that mutation
+## twice, while undoing nothing: the request has already executed on the backend.
 ##
 ## [b]Announcements are per event, not per caller.[/b] [SessionStore] emits nothing and
 ## reports [method SessionStore.rotation_count] instead, because a refresh is single-flight:
@@ -244,6 +255,11 @@ async func clear_session() -> CompletionResult:
 ##
 ## A second refusal ends the session rather than buying another refresh: the token just
 ## issued was rejected, so nothing another round could produce would be accepted either.
+##
+## A reply that arrives after the session was replaced is still returned to this caller — it
+## is the data this call asked for, fetched with the credential it was authorized with. What
+## a replacement does change is that the request is not replayed under the new session, and a
+## refusal is not allowed to end it.
 ##
 ## Exhaustive over [SessionResult]; the trailing return exists only because the analyser
 ## cannot see that the match is total.
