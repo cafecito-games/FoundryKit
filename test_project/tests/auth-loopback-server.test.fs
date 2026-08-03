@@ -330,6 +330,30 @@ func test_an_oversized_request_line_that_arrives_complete_is_refused() -> void:
 	Expect.that(_describe(outcome)).to_equal(
 			"failed:the request line exceeded %d bytes" % LoopbackServer.MAX_REQUEST_BYTES)
 
+## Padding is data too: a line trimmed down to nothing has still cost this process whatever
+## the peer sent, so the cap is measured before the line is trimmed.
+func test_an_oversized_run_of_whitespace_is_refused() -> void:
+	var server: LoopbackServer = _started_server()
+	var pending: Coroutine[LoopbackOutcome] = server.await_callback(_GENEROUS_TIMEOUT_SECONDS)
+	var padded: String = "%s GET /?code=abc HTTP/1.1\r\n\r\n" % (
+			" ".repeat(LoopbackServer.MAX_REQUEST_BYTES + 64))
+	await _connect_and_send(server.port(), padded)
+	var outcome: LoopbackOutcome = await pending
+	Expect.that(_describe(outcome)).to_equal(
+			"failed:the request line exceeded %d bytes" % LoopbackServer.MAX_REQUEST_BYTES)
+
+## A callback with neither a code nor an error is malformed, and the caller will reject it.
+## Claiming success in the browser leaves the player told one thing and the game doing
+## another.
+func test_a_callback_without_a_code_is_not_answered_with_a_success_page() -> void:
+	var server: LoopbackServer = _started_server()
+	var pending: Coroutine[LoopbackOutcome] = server.await_callback(_GENEROUS_TIMEOUT_SECONDS)
+	var client: StreamPeerTCP = await _connect_and_send(
+			server.port(), "GET /?state=xyz HTTP/1.1\r\n\r\n")
+	await pending
+	var response: String = await _read_response(client)
+	Expect.that(response.contains("You are signed in")).to_be_false()
+
 ## The cap bounds the request line, not the request. A browser sending several kibibytes of
 ## cookies with an ordinary callback is not an abusive peer, and refusing it would break
 ## sign-in on exactly the machines that have signed in before.

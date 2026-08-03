@@ -253,11 +253,13 @@ func _poll_once() -> void:
 	# let exactly that case through. Measuring the line rather than the buffer is equally
 	# deliberate: everything after the first newline is headers, and a browser sending a few
 	# kibibytes of cookies must not be mistaken for an abusive peer.
-	var request_line: String = _request.substr(0, newline).strip_edges()
-	if request_line.length() > MAX_REQUEST_BYTES:
+	# Measured before trimming, and on the raw line rather than on what survives trimming:
+	# a peer that pads a line with a mebibyte of spaces has still made this process hold a
+	# mebibyte, whatever the line collapses to afterwards.
+	if newline > MAX_REQUEST_BYTES:
 		_refuse_oversized(connection)
 		return
-	_complete(connection, request_line)
+	_complete(connection, _request.substr(0, newline).strip_edges())
 
 func _refuse_oversized(connection: StreamPeerTCP) -> void:
 	_log.warn("a loopback peer sent an oversized request line")
@@ -288,16 +290,28 @@ func _accept_connection() -> bool:
 ## socket. Without it the player sees a browser error page on a sign-in that in fact
 ## succeeded, which is the most confusing failure this class can produce.
 ##
-## A callback carrying [code]error[/code] is answered with a page that does not claim
-## success. That is the one piece of OAuth vocabulary this class knows, and it is
-## unavoidable: it is the only participant with a page in front of the player, so telling
-## someone who has just pressed Cancel that they are signed in would be a plain lie. What
-## the error [i]means[/i] — cancellation, a refused scope, a misconfigured client — stays
-## the caller's to decide; the outcome it receives is an ordinary [code]Received[/code]
-## either way (RFC 6749 §4.1.2.1).
+## Only a callback that carries an authorization code and no [code]error[/code] is answered
+## with a page claiming success. That is the one piece of OAuth vocabulary this class knows,
+## and it is unavoidable: it is the only participant with a page in front of the player, so
+## telling someone who has just pressed Cancel — or whose callback arrived malformed — that
+## they are signed in would be a plain lie they then act on. What the error [i]means[/i]
+## stays the caller's to decide, and the outcome it receives is an ordinary
+## [code]Received[/code] either way (RFC 6749 §4.1.2).
+##
+## [b]The page is written before [code]state[/code] has been verified,[/b] because only the
+## caller knows the value to compare against. A forged callback carrying a plausible code is
+## therefore shown a success page while sign-in fails. Moving the reply behind that check
+## would mean holding the socket open past the settlement, which is the lifetime the
+## single-settle contract above exists to rule out; giving this class the expected
+## [code]state[/code] would move the check out of the backend, where it can be proved not to
+## exchange the code. Both are worse trades than one misleading page in an attack that has
+## already failed.
 func _complete(connection: StreamPeerTCP, request_line: String) -> void:
 	var query: Dictionary[String, String] = _query_of(request_line)
-	if query.has("error"):
+	var code: String = ""
+	if query.has("code"):
+		code = query["code"]
+	if query.has("error") or code.is_empty():
 		_write_response(connection, "200 OK", _REFUSED_PAGE)
 	else:
 		_write_response(connection, "200 OK", _SUCCESS_PAGE)
