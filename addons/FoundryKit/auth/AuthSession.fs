@@ -32,21 +32,29 @@ func _init(
 
 ## Returns the access token's `exp` claim, or 0 when it carries none.
 ##
-## An opaque (non-JWT) access token has no readable expiry. Treating it as
-## never-expiring is deliberate: the backend is the authority, and a 401 will surface
-## expiry through [code]AuthError.SessionExpired[/code] instead.
+## A returned 0 does not by itself mean "no expiry" — a token stamped [code]exp: 0[/code]
+## reports the same value. Pair it with [method has_expiry] to tell the two apart.
 func expires_at() -> int:
 	return Jwt.expiry_from(access_token)
 
+## Returns whether the access token carries a readable expiry at all.
+##
+## An opaque (non-JWT) access token has none.
+func has_expiry() -> bool:
+	return Jwt.has_expiry(access_token)
+
 ## Returns whether the session is expired at [param now_unix_seconds].
 ##
-## Per RFC 7519, [code]exp[/code] is the instant on or after which a token must not be
-## accepted, so the boundary itself counts as expired.
+## A token with no readable `exp` never expires locally. That is deliberate: the backend
+## is the authority, and a 401 surfaces expiry through
+## [code]AuthError.SessionExpired[/code] instead. A token that does carry `exp` is
+## compared against it, including a literal 0, which per RFC 7519 means expired at the
+## epoch — `exp` is the instant on or after which a token must not be accepted, so the
+## boundary itself counts as expired.
 func is_expired_at(now_unix_seconds: int) -> bool:
-	var expiry: int = expires_at()
-	if expiry == 0:
+	if not has_expiry():
 		return false
-	return now_unix_seconds >= expiry
+	return now_unix_seconds >= expires_at()
 
 ## Returns an independent copy; mutating it cannot affect this session.
 func duplicate_session() -> AuthSession:

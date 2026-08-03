@@ -10,6 +10,12 @@ uses Test
 ## header.payload.signature — payload decodes to {"sub":"user-123","exp":1750000000}
 const _VALID: String = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEyMyIsImV4cCI6MTc1MDAwMDAwMH0.sig"
 
+## Payload decodes to {"sub":"user-123"} — a well-formed JWT carrying no `exp` claim.
+const _WITHOUT_EXP: String = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEyMyJ9.sig"
+
+## Payload decodes to {"exp":0} — expired at the Unix epoch.
+const _EXP_ZERO: String = "eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjB9.sig"
+
 func test_subject_is_decoded() -> void:
 	Expect.that(Jwt.subject_from(_VALID)).to_equal("user-123")
 
@@ -40,3 +46,24 @@ func test_base64url_alphabet_is_translated() -> void:
 func test_float_expiry_is_truncated_to_int() -> void:
 	# {"exp":1750000000.9} -> eyJleHAiOjE3NTAwMDAwMDAuOX0
 	Expect.that(Jwt.expiry_from("aaa.eyJleHAiOjE3NTAwMDAwMDAuOX0.sig")).to_equal(1750000000)
+
+func test_readable_expiry_is_reported() -> void:
+	Expect.that(Jwt.has_expiry(_VALID)).to_be_true()
+
+## `exp: 0` is a real claim meaning "expired at the epoch"; its absence means "unknown".
+## Returning 0 for both made them indistinguishable — see #57.
+func test_absent_exp_reports_no_expiry() -> void:
+	Expect.that(Jwt.has_expiry(_WITHOUT_EXP)).to_be_false()
+	Expect.that(Jwt.expiry_from(_WITHOUT_EXP)).to_equal(0)
+
+func test_explicit_zero_exp_reports_an_expiry() -> void:
+	Expect.that(Jwt.has_expiry(_EXP_ZERO)).to_be_true()
+	Expect.that(Jwt.expiry_from(_EXP_ZERO)).to_equal(0)
+
+func test_opaque_token_reports_no_expiry() -> void:
+	Expect.that(Jwt.has_expiry("not-a-jwt")).to_be_false()
+	Expect.that(Jwt.has_expiry("")).to_be_false()
+
+func test_non_numeric_exp_reports_no_expiry() -> void:
+	# {"exp":"soon"} -> eyJleHAiOiJzb29uIn0
+	Expect.that(Jwt.has_expiry("aaa.eyJleHAiOiJzb29uIn0.sig")).to_be_false()

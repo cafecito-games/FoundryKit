@@ -18,11 +18,12 @@ static func subject_from(token: String) -> String:
 ## Returns the `exp` claim as a Unix timestamp, or 0 when absent or undecodable.
 ##
 ## Accepts both int and float encodings; JSON parsers commonly widen large integers.
+##
+## A returned 0 is ambiguous by design: it is both the value of a literal
+## [code]exp: 0[/code] — expired at the Unix epoch — and the fallback for a token that
+## carries no readable expiry. Ask [method has_expiry] first when the difference matters.
 static func expiry_from(token: String) -> int:
-	var claims: Dictionary = _claims_of(token)
-	if claims.is_empty():
-		return 0
-	var expiry: Variant = claims.get("exp")
+	var expiry: Variant = _expiry_claim_of(token)
 	if expiry is int:
 		var as_int: int = expiry
 		return as_int
@@ -30,6 +31,24 @@ static func expiry_from(token: String) -> int:
 		var as_float: float = expiry
 		return int(as_float)
 	return 0
+
+## Returns whether the token carries a readable `exp` claim at all.
+##
+## [method expiry_from] cannot express this: it returns 0 both for an absent claim and
+## for a literal `exp: 0`, which are different facts. A caller deciding whether a token
+## can expire must ask this first.
+static func has_expiry(token: String) -> bool:
+	return _expiry_claim_of(token) != null
+
+## Returns the raw `exp` claim, or null when the token carries no numeric one.
+static func _expiry_claim_of(token: String) -> Variant:
+	var claims: Dictionary = _claims_of(token)
+	if claims.is_empty():
+		return null
+	var expiry: Variant = claims.get("exp")
+	if expiry is int or expiry is float:
+		return expiry
+	return null
 
 static func _claims_of(token: String) -> Dictionary:
 	var segments: PackedStringArray = token.split(".")
