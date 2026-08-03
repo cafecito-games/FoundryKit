@@ -284,18 +284,26 @@ async func sign_in_silent(provider: Provider) -> SessionResult:
 ## moment simply never lands — which is the one case the revoke exists for. The cost is one
 ## round trip on a call the player is already waiting on.
 ##
-## [b]It revokes the session being discarded and no other.[/b] The token travels by value:
-## it is read before [method _forget] and never re-read, and the request is dispatched with
-## no await in between, so no sign-in and no [method configure_backend] can interleave
-## between reading the token and putting it on the wire. A session installed while the
-## revoke is in flight therefore has neither its token retired nor — since nothing after the
-## revoke writes to the store — its session ended. That is why this needs no generation
-## check of its own: there is no window for one to close.
+## [b]It runs after the native sign-out, not before.[/b] The native call is what clears the
+## provider's own credentials, and it is destructive to whatever account is signed in when
+## it runs. Putting a network round trip in front of it would widen the window in which a
+## sign-in can complete first, leaving the player natively signed out of the account they
+## just chose. Ordering the revoke second leaves that window exactly the length it has
+## always been.
+##
+## [b]It revokes the session being discarded and no other.[/b] The token travels by value,
+## read before [method _forget] and never re-read, so a session installed while the sign-out
+## is running cannot be substituted for it — and nothing here writes to the store after
+## [method _forget], so such a session is not ended either. What running second does need is
+## the backend generation, because [method configure_backend] can land during the native
+## call: see [method _revoke].
 async func sign_out(provider: Provider) -> CompletionResult:
 	var discarded: AuthSession? = _store.session()
+	var backend_generation: int = _backend_generation
 	_forget()
-	var _was_revoked: bool = await _revoke(discarded)
-	return await _backend.sign_out(provider)
+	var native: CompletionResult = await _backend.sign_out(provider)
+	var _was_revoked: bool = await _revoke(discarded, backend_generation)
+	return native
 
 func has_session() -> bool:
 	return _store.has_session()
@@ -720,6 +728,15 @@ func _current_expiry() -> int:
 ## of those cases would either have nowhere to go or would carry an empty credential the
 ## backend can only refuse.
 ##
+## [param backend_generation] is the generation the sign-out began under, and a mismatch
+## abandons the revoke. The native sign-out this runs after can take arbitrarily long, and
+## [method configure_backend] can land inside it. A refresh token issued by one backend is
+## not a credential at another: posting it to the replacement would disclose the first
+## service's credential to the second, and unlike every other guard here that cannot be
+## undone afterwards. Leaving the old token to expire on its own is the lesser harm, and it
+## matches [method _exchange_credential], which refuses to disclose a credential across a
+## move for the same reason.
+##
 ## The request presents no bearer credential, matching the refresh endpoint. A sign-out is
 ## most often asked for after a long absence, when the access token has already expired, so
 ## authorizing the revoke with it would earn a 401 in precisely the case revocation matters
@@ -727,7 +744,10 @@ func _current_expiry() -> int:
 ##
 ## The caller ignores the return value; it exists so the outcome is stated rather than
 ## discarded silently, and so a test can distinguish "revoked" from "not attempted".
-async func _revoke(discarded: AuthSession?) -> bool:
+async func _revoke(discarded: AuthSession?, backend_generation: int) -> bool:
+	if backend_generation != _backend_generation:
+		_log.debug("not revoking a token at a backend configured since the sign-out began")
+		return false
 	if not _is_backend_configured():
 		return false
 	var session: AuthSession? = discarded

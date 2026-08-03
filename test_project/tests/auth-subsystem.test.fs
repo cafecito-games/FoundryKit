@@ -774,11 +774,11 @@ func test_a_revoke_carries_the_token_of_the_session_being_discarded() -> void:
 	Expect.that(subsystem.has_session()).to_be_true()
 	Expect.that(subsystem.access_token()).to_equal("access-b")
 
-func test_the_revoke_is_dispatched_before_the_backend_can_be_moved_under_it() -> void:
-	# The revoke goes out before the native sign-out, and with no await between reading the
-	# token and putting it on the wire. Doing it the other way round would leave a whole
-	# native round trip in which configure_backend could land — and would then post the
-	# original backend's refresh token to a service that never issued it.
+func test_a_revoke_is_abandoned_when_the_backend_moved_during_the_native_sign_out() -> void:
+	# The native sign-out takes arbitrarily long and configure_backend can land inside it. The
+	# refresh token was issued by the original backend and is not a credential at the new one:
+	# posting it there would hand a second service the first one's secret, and no later guard
+	# can take that back.
 	await _install_session("access-one", _REFRESH_TOKEN)
 	_transport.enqueue(HttpOutcome.Answered(200, "{}".to_utf8_buffer()))
 	_backend.sign_out_suspends = true
@@ -789,10 +789,29 @@ func test_the_revoke_is_dispatched_before_the_backend_can_be_moved_under_it() ->
 	_backend.release()
 
 	Expect.that(_describe_completion(await pending)).to_equal("ok")
+	Expect.that(_transport.send_count).to_equal(0)
+
+func test_the_native_sign_out_completes_before_the_revoke_reaches_the_wire() -> void:
+	# The native call clears the provider's own credentials and is destructive to whoever is
+	# signed in when it runs, so it must not be delayed by a network round trip: a sign-in
+	# completing in a widened window would leave the player natively signed out of the account
+	# they just chose. Ordering the revoke second keeps that window its original length.
+	var transport: SuspendingTransport = SuspendingTransport.new(_transport)
+	var subsystem: AuthSubsystem = AuthSubsystem.new(_log, transport, _config, _backend)
+	_backend.restore_result = SessionResult.Success(_session("access-one", _REFRESH_TOKEN))
+	await subsystem.restore_session()
+
+	_transport.enqueue(HttpOutcome.Answered(200, "{}".to_utf8_buffer()))
+	transport.suspend_on_send = 1
+	var pending: Coroutine[CompletionResult] = subsystem.sign_out(Provider.GOOGLE)
+
+	await transport.parked
+	# The revoke is parked on the wire and the native sign-out has already been made.
+	Expect.that(_backend.sign_out_count).to_equal(1)
+	transport.release()
+
+	Expect.that(_describe_completion(await pending)).to_equal("ok")
 	Expect.that(_transport.send_count).to_equal(1)
-	# The literal origin, not _config.url_for: configure_backend copies into the very instance
-	# _config names, so asking it after the move would report the move rather than the request.
-	Expect.that(_transport.last_url).to_equal("https://api.example.com/v1/auth/sign-out")
 
 # --- Storage delegation -----------------------------------------------------------------
 
