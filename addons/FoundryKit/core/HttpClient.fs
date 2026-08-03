@@ -10,6 +10,10 @@ namespace games.cafecito.foundrykit.core
 ## solved the identical problems first. See the comments on [member _in_flight] and
 ## [method _PendingRequest._resolve] for why each is required.
 ##
+## Redirects are never followed: a 3xx comes back as an [code]Answered[/code] status for
+## the caller to act on. Following one would replay the caller's headers at whatever host
+## the response named, so any credential in them would leave the origin the caller chose.
+##
 ## Without a running [SceneTree] there is nowhere to park an [HTTPRequest] node and no
 ## watchdog clock, so [method send] resolves immediately with
 ## [code]TransportFailed[/code]. That is deliberate: a headless host must get an answer it
@@ -98,6 +102,13 @@ class _PendingRequest extends RefCounted:
 		_pending.append(self)
 		tree.root.add_child(node)
 		node.timeout = timeout_seconds
+		# Never follow redirects. [HTTPRequest] otherwise follows up to eight of them and
+		# replays the caller's headers on each hop, including when Location names a
+		# different origin — which would hand whatever credential a caller put in those
+		# headers to a host it never chose to talk to. A redirect is reported to the caller
+		# as the status it is, and the caller decides whether the new location is one it
+		# trusts.
+		node.max_redirects = 0
 		node.request_completed.connect(_on_request_completed)
 
 		# The watchdog bounds a network call, not game simulation — it must keep running
@@ -136,6 +147,13 @@ class _PendingRequest extends RefCounted:
 			return
 		if result == HTTPRequest.RESULT_TIMEOUT:
 			_resolve(HttpOutcome.TimedOut(_elapsed_seconds()))
+			return
+		if result == HTTPRequest.RESULT_REDIRECT_LIMIT_REACHED and response_code > 0:
+			# Redirects are refused rather than followed (see [method perform]), so the
+			# engine reports the 3xx this way. Report it as the answer it is, so a caller
+			# can tell a moved endpoint from a host it could not reach. The body is empty
+			# on this path — only the status and the engine's own headers are available.
+			_resolve(HttpOutcome.Answered(response_code, body))
 			return
 		_resolve(HttpOutcome.TransportFailed(_describe_result(result)))
 
@@ -213,5 +231,5 @@ class _PendingRequest extends RefCounted:
 			HTTPRequest.RESULT_NO_RESPONSE:
 				return "the host closed the connection without responding"
 			HTTPRequest.RESULT_REDIRECT_LIMIT_REACHED:
-				return "too many redirects"
+				return "the host redirected the request, which is not followed"
 		return "the request failed (%d)" % result

@@ -24,6 +24,10 @@ trait_name HttpTransport
 ##
 ## An implementation must settle exactly once and must never resolve to an error the
 ## caller cannot act on: a request that cannot be started at all is still an outcome.
+##
+## An implementation must not follow redirects on the caller's behalf. [param headers] may
+## carry a credential, and replaying it at whatever host a 3xx response names would send
+## that credential somewhere the caller never chose. Report the status instead.
 abstract async func send(
 		method: String,
 		url: String,
