@@ -498,6 +498,30 @@ func test_refresh_session_is_abandoned_when_the_session_is_replaced_mid_refresh(
 	Expect.that(_describe_session(await pending)).to_equal("fail:session_expired:0")
 	Expect.that(_subsystem.access_token()).to_equal("access-b")
 
+func test_a_refused_replay_leaves_a_session_installed_since_alone() -> void:
+	# The replay was authorized as one player and refused. Ending "the" session at that point
+	# ends whoever signed in while it was on the wire, whose own credential was never refused.
+	var transport: SuspendingTransport = SuspendingTransport.new(_transport)
+	var subsystem: AuthSubsystem = AuthSubsystem.new(_log, transport, _config, _backend)
+	_backend.restore_result = SessionResult.Success(_session("access-a", "refresh-a"))
+	await subsystem.restore_session()
+
+	_transport.enqueue(HttpOutcome.Answered(401, PackedByteArray()))
+	_transport.enqueue(HttpOutcome.Answered(200, _fresh_session_json()))
+	_transport.enqueue(HttpOutcome.Answered(401, PackedByteArray()))
+	transport.suspend_on_send = 3
+	var pending: Coroutine[ResponseResult] = subsystem.request(HttpMethod.GET, "/me", null)
+
+	await transport.parked
+	_backend.restore_result = SessionResult.Success(_session("access-b", "refresh-b"))
+	await subsystem.restore_session()
+	transport.release()
+
+	Expect.that(_describe_response(await pending)).to_equal("fail:session_expired")
+	Expect.that(_transport.send_count).to_equal(3)
+	Expect.that(subsystem.has_session()).to_be_true()
+	Expect.that(subsystem.access_token()).to_equal("access-b")
+
 # --- Configuration the exchange needs -----------------------------------------------------
 
 func test_the_configured_web_client_id_becomes_the_exchange_audience() -> void:
@@ -700,6 +724,44 @@ func _describe_error(error: AuthError) -> String:
 		AuthError.TimedOut(elapsed_seconds):
 			return "timed_out:%s" % elapsed_seconds
 	return "unknown"
+
+## A [HttpTransport] that parks one chosen request until a test releases it.
+##
+## [FakeHttpClient] never suspends, which is what makes it fast and what makes it unable to
+## model a session changing while a request is on the wire. This wraps it and parks the send
+## whose ordinal matches [member suspend_on_send], so a test can land a sign-in inside
+## exactly one request and nowhere else.
+class SuspendingTransport extends RefCounted uses HttpTransport:
+
+	## Emitted once the chosen send has parked, so a test knows the request is suspended
+	## rather than merely started.
+	signal parked()
+
+	signal _released()
+
+	## The 1-based ordinal of the send to park. Zero parks nothing.
+	var suspend_on_send: int = 0
+
+	var _inner: FakeHttpClient
+
+	func _init(inner: FakeHttpClient) -> void:
+		_inner = inner
+
+	## Resumes the parked send, one message-queue turn later so a caller that has not yet
+	## reached its own await cannot miss the emission.
+	func release() -> void:
+		_released.emit.call_deferred()
+
+	async func send(
+			method: String,
+			url: String,
+			headers: PackedStringArray,
+			body: PackedByteArray,
+			timeout_seconds: float) -> HttpOutcome:
+		if _inner.send_count + 1 == suspend_on_send:
+			parked.emit.call_deferred()
+			await _released
+		return await _inner.send(method, url, headers, body, timeout_seconds)
 
 ## A scripted [AuthBackend]: no native class, no platform, no waiting.
 ##

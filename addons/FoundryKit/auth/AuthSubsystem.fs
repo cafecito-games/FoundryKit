@@ -265,7 +265,7 @@ async func request(method: HttpMethod, path: String, body: Variant) -> ResponseR
 				return _replaced_mid_request()
 			var retried: ResponseResult = await _client.request(
 					method, path, body, _store.access_token())
-			return _result_of_retry(retried)
+			return _result_of_retry(retried, generation)
 	return ResponseResult.Failure(AuthError.InvalidResponse(
 			"the session store reported a result this subsystem does not understand"))
 
@@ -329,11 +329,18 @@ func _replaced_mid_request() -> ResponseResult:
 
 ## Returns what a replayed request resolves to.
 ##
-## The only case this changes is a second refusal, which ends the session. Everything else
-## is the backend's own answer and is passed through untouched.
-func _result_of_retry(retried: ResponseResult) -> ResponseResult:
+## The only case this changes is a second refusal, which ends the session — and only when
+## the session it refused is still the one held. A reply that arrives after an explicit
+## sign-in or sign-out refused a credential that no longer matters. Everything else is the
+## backend's own answer and is passed through untouched.
+func _result_of_retry(retried: ResponseResult, generation: int) -> ResponseResult:
 	if not _is_refused(retried):
 		return retried
+	if _session_replaced_since(generation):
+		# The refusal belongs to the session this request was authorized under, which is no
+		# longer the one held. Clearing now would end the session that replaced it — signing
+		# out a player whose own credential was never refused.
+		return _replaced_mid_request()
 	var expired_at: int = _current_expiry()
 	_forget_lapsed()
 	_announce_lapse(AuthError.SessionExpired(expired_at))
