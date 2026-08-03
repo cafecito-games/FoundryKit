@@ -44,7 +44,10 @@ let package = Package(
         ),
         .testTarget(
             name: "FoundryKitAuthTests",
-            dependencies: ["FoundryKitAuth"],
+            dependencies: [
+                "FoundryKitAuth",
+                .product(name: "GoogleSignIn", package: "GoogleSignIn-iOS"),
+            ],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]

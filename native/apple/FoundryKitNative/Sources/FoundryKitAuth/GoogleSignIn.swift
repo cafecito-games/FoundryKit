@@ -40,6 +40,15 @@ class iOSGoogleSignIn: RefCounted {
     private var debugLogging = false
     private var isConfigured = false
 
+    /// The token of the sign-in currently awaiting a reply, if any.
+    ///
+    /// `GIDSignIn` is a singleton that keeps exactly one pending operation, so starting a
+    /// second one replaces the first one's completion handler: the earlier request would
+    /// never be answered, and the reply it was waiting for would be delivered under the
+    /// later request's token. Refusing the overlapping request keeps every emission
+    /// attributable to the request that caused it.
+    private var inFlightRequestToken: String?
+
     /// Configures GoogleSignIn. The iOS/macOS client ID comes from the host app's
     /// `Info.plist` (`GIDClientID`); `webClientId` becomes the `serverClientID` so the
     /// returned ID token is minted for the game's backend.
@@ -77,12 +86,17 @@ class iOSGoogleSignIn: RefCounted {
                 requestToken: requestToken)
             return
         }
+        guard inFlightRequestToken == nil else {
+            emit(.busy, requestToken: requestToken)
+            return
+        }
+        inFlightRequestToken = requestToken
         GIDSignIn.sharedInstance.signIn(
             withPresenting: anchor, hint: nil, additionalScopes: nil, nonce: nonce
         ) { [weak self] result, error in
             let outcome = extractOutcome(user: result?.user, error: error)
             MainActor.assumeIsolated {
-                self?.emit(outcome, requestToken: requestToken)
+                self?.settle(outcome, requestToken: requestToken)
             }
         }
     }
@@ -95,10 +109,15 @@ class iOSGoogleSignIn: RefCounted {
                 requestToken: requestToken)
             return
         }
+        guard inFlightRequestToken == nil else {
+            emit(.busy, requestToken: requestToken)
+            return
+        }
+        inFlightRequestToken = requestToken
         GIDSignIn.sharedInstance.restorePreviousSignIn { [weak self] user, error in
             let outcome = extractOutcome(user: user, error: error)
             MainActor.assumeIsolated {
-                self?.emit(outcome, requestToken: requestToken)
+                self?.settle(outcome, requestToken: requestToken)
             }
         }
     }
@@ -107,6 +126,14 @@ class iOSGoogleSignIn: RefCounted {
     func signOut(requestToken: String) {
         GIDSignIn.sharedInstance.signOut()
         signOutComplete.emit(requestToken)
+    }
+
+    /// Releases the in-flight slot and emits the outcome that answers `requestToken`.
+    private func settle(_ outcome: SignInOutcome, requestToken: String) {
+        if inFlightRequestToken == requestToken {
+            inFlightRequestToken = nil
+        }
+        emit(outcome, requestToken: requestToken)
     }
 
     private func emit(_ outcome: SignInOutcome, requestToken: String) {

@@ -1,3 +1,4 @@
+import GoogleSignIn
 import XCTest
 
 @testable import FoundryKitAuth
@@ -58,5 +59,38 @@ final class SignInOutcomeTests: XCTestCase {
         }
         XCTAssertEqual(code, errorCancelled)
         XCTAssertEqual(message, "The player cancelled the sign-in flow.")
+    }
+
+    func testNoStoredCredentialMapsToNoCredential() {
+        // `restorePreviousSignIn` reports this on a fresh install or after sign-out.
+        // It is the ordinary "nobody is signed in" answer, not a failure.
+        let error = NSError(
+            domain: kGIDSignInErrorDomain,
+            code: GIDSignInError.Code.hasNoAuthInKeychain.rawValue)
+        guard case let .failure(code, message) = extractOutcome(user: nil, error: error) else {
+            return XCTFail("expected failure")
+        }
+        XCTAssertEqual(code, errorNoCredential)
+        XCTAssertEqual(message, "Sign-in returned no credential.")
+    }
+
+    func testProviderDiagnosticsNeverReachTheMessage() {
+        let error = NSError(
+            domain: kGIDSignInErrorDomain,
+            code: GIDSignInError.Code.unknown.rawValue,
+            userInfo: [NSLocalizedDescriptionKey: "ada@example.com is not permitted"])
+        guard case let .failure(code, message) = extractOutcome(user: nil, error: error) else {
+            return XCTFail("expected failure")
+        }
+        XCTAssertEqual(code, errorGeneric)
+        XCTAssertEqual(message, "Sign-in failed.")
+    }
+
+    func testBusyOutcomeIsFixedAndNonIdentifying() {
+        guard case let .failure(code, message) = SignInOutcome.busy else {
+            return XCTFail("expected failure")
+        }
+        XCTAssertEqual(code, errorGeneric)
+        XCTAssertEqual(message, "Another sign-in is already in progress.")
     }
 }

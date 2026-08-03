@@ -21,6 +21,8 @@ enum SignInOutcome: Sendable {
         code: errorNoCredential, message: "Sign-in returned no credential.")
     static let generic = SignInOutcome.failure(
         code: errorGeneric, message: "Sign-in failed.")
+    static let busy = SignInOutcome.failure(
+        code: errorGeneric, message: "Another sign-in is already in progress.")
 }
 
 /// Converts a GoogleSignIn completion payload into an outcome.
@@ -44,10 +46,19 @@ func extractOutcome(user: GIDGoogleUser?, error: Error?) -> SignInOutcome {
         return .generic
     }
     let nsError = error as NSError
-    let isCancelled =
-        nsError.domain == kGIDSignInErrorDomain
-        && nsError.code == GIDSignInError.Code.canceled.rawValue
-    return isCancelled ? .cancelled : .generic
+    guard nsError.domain == kGIDSignInErrorDomain else {
+        return .generic
+    }
+    switch nsError.code {
+    case GIDSignInError.Code.canceled.rawValue:
+        return .cancelled
+    // `restorePreviousSignIn` reports this when the player has never signed in or has
+    // signed out since. That is the ordinary "nobody is signed in" answer, not a fault.
+    case GIDSignInError.Code.hasNoAuthInKeychain.rawValue:
+        return .noCredential
+    default:
+        return .generic
+    }
 }
 
 /// Returns `raw` when it is a non-empty client ID, otherwise nil.
