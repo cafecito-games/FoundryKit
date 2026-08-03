@@ -8,13 +8,13 @@ namespace games.cafecito.foundrykit.core
 ##
 ## An instance handles exactly one request and settles exactly once.
 ##
-## This adapter does not correlate a native's signal emission to a specific request — the
-## native protocol carries no per-call token. If a request times out or is [method
-## abandon]ed while its underlying native operation is still running, and a *new* request
-## later connects to the same native target and signal names, a late emission from the
-## first operation can be mistaken for the second request's result. Preventing that
-## overlap (single-flight gating per native target) is a sibling concern, not this
-## class's job.
+## Each request may carry a per-call correlation token. When it does, the native echoes
+## that token as the **first** argument of both its success and failure signals, and this
+## adapter ignores any emission carrying a different one. That closes the window where a
+## timed-out or [method abandon]ed request's late reply is mistaken for the result of a
+## later request connected to the same target and signal names. A request started with an
+## empty token opts out and accepts any emission, which is the correct behaviour for a
+## native that predates the token protocol.
 class_name NativeRequest extends RefCounted
 
 const DEFAULT_TIMEOUT_SECONDS: float = 120.0
@@ -36,6 +36,7 @@ var _target: Object? = null
 var _success_signal: String = ""
 var _failure_signal: String = ""
 var _started_ticks_ms: int = 0
+var _correlation_token: String = ""
 
 func _init(log: FoundryKitLog) -> void:
 	_log = log
@@ -45,6 +46,11 @@ func _init(log: FoundryKitLog) -> void:
 ## [param payload_fields] names the success signal's arguments in order; they are zipped
 ## into the [code]Succeeded[/code] payload. Extra field names beyond the emitted argument
 ## count are omitted rather than filled with nulls.
+##
+## [param correlation_token] opts the request into emission filtering. When it is
+## non-empty, both signals are expected to carry it as their first argument; emissions
+## carrying anything else are ignored without settling, and the token itself is consumed
+## rather than zipped into the payload. An empty token disables filtering entirely.
 ##
 ## Await the returned [Coroutine] promptly — do not hold it across a frame boundary
 ## before awaiting it. This engine's [code]await[/code] does not check whether a
@@ -62,7 +68,9 @@ async func await_outcome(
 		success_signal: String,
 		payload_fields: Array[String],
 		failure_signal: String,
-		timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) -> NativeOutcome:
+		timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+		correlation_token: String = "") -> NativeOutcome:
+	_correlation_token = correlation_token
 	_target = target
 	_success_signal = success_signal
 	_failure_signal = failure_signal
@@ -91,18 +99,50 @@ async func await_outcome(
 func abandon() -> void:
 	_resolve(NativeOutcome.Abandoned)
 
+## Accepts an emission only when it answers this request.
+##
+## With a correlation token, the native echoes it as the **first** signal argument;
+## a non-matching emission belongs to an earlier request that timed out or was
+## abandoned, and must be ignored without settling — settling on it would hand one
+## request's result to another.
+##
 ## The rest parameter cannot be a typed array — the engine rejects
 ## `...values: Array[Variant]` with "Typed arrays are currently not supported for the
 ## rest parameter". Elements stay Variant and are copied into the payload unconverted.
 func _on_native_success(...values: Array) -> void:
+	var offset: int = 0
+	if not _correlation_token.is_empty():
+		if values.is_empty():
+			return
+		if str(values[0]) != _correlation_token:
+			_log.debug("ignoring success emission for a different request")
+			return
+		offset = 1
 	var payload: Dictionary[String, Variant] = {}
-	var count: int = mini(_payload_fields.size(), values.size())
+	var available: int = values.size() - offset
+	var count: int = mini(_payload_fields.size(), available)
 	for index: int in range(count):
-		payload[_payload_fields[index]] = values[index]
+		payload[_payload_fields[index]] = values[index + offset]
 	_resolve(NativeOutcome.Succeeded(payload))
 
-func _on_native_failed(code: int, message: String) -> void:
-	_resolve(NativeOutcome.Failed(code, message))
+## Filters failure emissions by the same rule as [method _on_native_success]. It takes a
+## rest parameter rather than (code, message) so it can absorb the leading token.
+func _on_native_failed(...values: Array) -> void:
+	var offset: int = 0
+	if not _correlation_token.is_empty():
+		if values.is_empty():
+			return
+		if str(values[0]) != _correlation_token:
+			_log.debug("ignoring failure emission for a different request")
+			return
+		offset = 1
+	if values.size() < offset + 2:
+		return
+	var code: int = 0
+	var raw_code: Variant = values[offset]
+	if raw_code is int:
+		code = raw_code
+	_resolve(NativeOutcome.Failed(code, str(values[offset + 1])))
 
 func _on_timeout() -> void:
 	# The watchdog timer stays connected until the request settles, so a request that
