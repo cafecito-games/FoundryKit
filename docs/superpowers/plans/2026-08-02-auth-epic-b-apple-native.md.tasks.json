@@ -1,0 +1,60 @@
+{
+  "planPath": "docs/superpowers/plans/2026-08-02-auth-epic-b-apple-native.md",
+  "tasks": [
+    {
+      "id": 1,
+      "subject": "Task 1: Swift package skeleton with a Core target",
+      "status": "pending",
+      "description": "**Goal:** A buildable two-target SwiftPM package pinned to Foundry-Swift-Binary 0.1.0-alpha.2, with FoundryKitCore as a shared dynamic product and FoundryKitAuth depending on it.\n\n**Files:**\n- Create: native/apple/FoundryKitNative/Package.swift\n- Create: native/apple/FoundryKitNative/Sources/FoundryKitCore/CorrelatedSignal.swift\n- Create: native/apple/FoundryKitNative/Sources/FoundryKitAuth/Placeholder.swift\n- Create: native/apple/FoundryKitNative/Tests/FoundryKitCoreTests/CorrelatedSignalTests.swift\n- Modify: .gitignore\n\n**Acceptance Criteria:**\n- swift build succeeds against Foundry-Swift-Binary 0.1.0-alpha.2\n- swift test runs and passes\n- FoundryKitCore is .dynamic; FoundryKitAuth depends on it\n- FoundryKitCore holds no shared mutable static state\n- .build/ and *.xcodeproj are gitignored\n- The alpha.1 to alpha.2 bump is confirmed working, or the failure is reported rather than worked around\n\n**Verify:** cd native/apple/FoundryKitNative && swift test\n\n```json:metadata\n{\"files\": [\"native/apple/FoundryKitNative/Package.swift\", \"native/apple/FoundryKitNative/Sources/FoundryKitCore/CorrelatedSignal.swift\", \".gitignore\"], \"verifyCommand\": \"cd native/apple/FoundryKitNative && swift test\", \"acceptanceCriteria\": [\"swift build succeeds on alpha.2\", \"swift test passes\", \"FoundryKitCore is dynamic and holds no static mutable state\", \"build output is gitignored\"]}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "Task 2: Correlation-token filtering in NativeRequest",
+      "status": "pending",
+      "description": "**Goal:** Teach core/NativeRequest to ignore emissions that do not answer the request it is awaiting, without changing behaviour for any existing caller.\n\n**Files:**\n- Modify: addons/FoundryKit/core/NativeRequest.fs\n- Modify: test_project/tests/support/fake_native.notest.fs\n- Modify: test_project/tests/native-request.test.fs\n\n**Acceptance Criteria:**\n- await_outcome accepts correlation_token: String defaulting to \"\"\n- With a non-empty token, a mismatched emission is ignored without settling\n- A matching emission settles and the token is not in the payload\n- With an empty token, behaviour is exactly today's\n- The failure signal is filtered by the same rule\n- Every pre-existing NativeRequestTests case still passes unchanged\n- The class doc comment no longer disclaims correlation\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/core/NativeRequest.fs\", \"test_project/tests/support/fake_native.notest.fs\", \"test_project/tests/native-request.test.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"mismatched emissions are ignored without settling\", \"empty token preserves existing behaviour\", \"all pre-existing NativeRequestTests pass unchanged\"]}\n```"
+    },
+    {
+      "id": 3,
+      "subject": "Task 3: The Google Sign-In native class",
+      "status": "pending",
+      "blockedBy": [1],
+      "description": "**Goal:** The Swift class that drives GoogleSignIn and emits correlated results.\n\n**Files:**\n- Create: native/apple/FoundryKitNative/Sources/FoundryKitAuth/SignInOutcome.swift\n- Create: native/apple/FoundryKitNative/Sources/FoundryKitAuth/GoogleSignIn.swift\n- Create: native/apple/FoundryKitNative/Sources/FoundryKitAuth/FoundryKitAuthEntry.swift\n- Create: native/apple/FoundryKitNative/Tests/FoundryKitAuthTests/SignInOutcomeTests.swift\n- Delete: native/apple/FoundryKitNative/Sources/FoundryKitAuth/Placeholder.swift\n- Modify: native/apple/FoundryKitNative/Package.swift\n\n**Acceptance Criteria:**\n- signIn(nonce:requestToken:) and signInSilent(requestToken:) take a correlation token\n- signInSuccess emits (request_token, id_token, email, display_name, authorization_code)\n- signInFailed emits (request_token, code, message)\n- Pure mapping functions are unit-tested without a host bundle\n- #initFoundryExtension uses cdecl foundry_kit_auth_entry_point\n- No provider diagnostic detail reaches the emitted message\n\n**Verify:** cd native/apple/FoundryKitNative && swift test\n\n```json:metadata\n{\"files\": [\"native/apple/FoundryKitNative/Sources/FoundryKitAuth/GoogleSignIn.swift\", \"native/apple/FoundryKitNative/Sources/FoundryKitAuth/SignInOutcome.swift\", \"native/apple/FoundryKitNative/Sources/FoundryKitAuth/FoundryKitAuthEntry.swift\"], \"verifyCommand\": \"cd native/apple/FoundryKitNative && swift test\", \"acceptanceCriteria\": [\"token is the first argument of both signals\", \"pure mapping functions are tested without a host bundle\", \"no provider diagnostics reach the emitted message\"]}\n```"
+    },
+    {
+      "id": 4,
+      "subject": "Task 4: xcframework build",
+      "status": "pending",
+      "blockedBy": [3],
+      "description": "**Goal:** A reproducible build producing FoundryKitAuth.xcframework and FoundryKitCore.framework, driven by a task target.\n\n**Files:**\n- Create: native/apple/FoundryKitNative/project.yml\n- Create: scripts/build-apple-auth\n- Modify: Taskfile.yml\n- Modify: .gitignore\n\n**Acceptance Criteria:**\n- task apple:auth produces addons/FoundryKit/bin/auth/FoundryKitAuth.xcframework with device and simulator slices, plus bin/core/FoundryKitCore.framework\n- Binary outputs are gitignored\n- The script fails loudly with a named missing tool\n- BUILD_LIBRARY_FOR_DISTRIBUTION is set\n- LD_RUNPATH_SEARCH_PATHS resolves FoundrySwift and FoundryKitCore at load time\n- The script is idempotent\n\n**Verify:** task apple:auth\n\n```json:metadata\n{\"files\": [\"native/apple/FoundryKitNative/project.yml\", \"scripts/build-apple-auth\", \"Taskfile.yml\", \".gitignore\"], \"verifyCommand\": \"task apple:auth\", \"acceptanceCriteria\": [\"xcframework has device and simulator slices\", \"binaries are gitignored\", \"running twice leaves the same tree\"]}\n```"
+    },
+    {
+      "id": 5,
+      "subject": "Task 5: Extension registration",
+      "status": "pending",
+      "blockedBy": [4],
+      "description": "**Goal:** Register the auth binary with the engine so iOSGoogleSignIn appears in ClassDB.\n\n**Files:**\n- Create: addons/FoundryKit/FoundryKitAuth.foundryextension\n- Create: addons/FoundryKit/bin/auth/.gitkeep, addons/FoundryKit/bin/core/.gitkeep\n\n**Acceptance Criteria:**\n- entry_symbol is foundry_kit_auth_entry_point, matching the cdecl exactly\n- [libraries] covers iOS device, iOS simulator and macOS arm64\n- [dependencies] lists FoundryKitCore.framework for every slice\n- .gitkeep files keep the bin directories present despite the gitignore\n- With binaries absent, task test:foundrylib still passes\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/FoundryKitAuth.foundryextension\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"entry_symbol matches the cdecl\", \"core framework is listed as a dependency for every slice\", \"absent binaries degrade rather than break\"]}\n```"
+    },
+    {
+      "id": 6,
+      "subject": "Task 6: AppleAuthBackend",
+      "status": "pending",
+      "blockedBy": [2, 5],
+      "description": "**Goal:** The Foundry Script backend that drives the native class through NativeRequest and returns a Credential.\n\n**Files:**\n- Create: addons/FoundryKit/auth/internal/AppleAuthBackend.fs\n- Create: test_project/tests/auth-apple-backend.test.fs\n- Create: test_project/tests/support/fake_google_native.notest.fs\n\n**Acceptance Criteria:**\n- Satisfies AuthBackend via uses\n- sign_in(Provider.GOOGLE) generates a fresh correlation token per call\n- Success maps to CredentialResult.Success(Credential.Google(...))\n- Failure maps through AuthError.from_native\n- Provider.APPLE and Provider.EMAIL_PASSWORD return Unavailable\n- With the native absent, is_available is false and sign_in returns Unavailable without hanging\n- Session storage returns Storage; Keychain is epic E\n- backend_name() returns \"apple\"\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/internal/AppleAuthBackend.fs\", \"test_project/tests/auth-apple-backend.test.fs\", \"test_project/tests/support/fake_google_native.notest.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"fresh correlation token per sign_in call\", \"non-Google providers return Unavailable\", \"absent native does not hang\"]}\n```"
+    },
+    {
+      "id": 7,
+      "subject": "Task 7: Wire the factory",
+      "status": "pending",
+      "blockedBy": [6],
+      "description": "**Goal:** Route iOS and macOS to the Apple backend.\n\n**Files:**\n- Modify: addons/FoundryKit/auth/internal/AuthBackendFactory.fs\n- Modify: test_project/tests/auth-backend-factory.test.fs\n\n**Acceptance Criteria:**\n- PlatformKind.IOS and PlatformKind.MACOS resolve to AppleAuthBackend\n- ANDROID, DESKTOP and UNKNOWN still resolve to NullAuthBackend\n- The epic-ownership comment is updated, not deleted\n- The Apple backend constructs and reports unavailable without the binary\n- test_resolve_current_returns_a_backend no longer asserts \"null\" — it would pass in Linux CI and fail on every developer's Mac\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/internal/AuthBackendFactory.fs\", \"test_project/tests/auth-backend-factory.test.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"Apple platforms resolve to the Apple backend\", \"other platforms still resolve to null\", \"resolve_current assertion is platform-independent\"]}\n```"
+    },
+    {
+      "id": 8,
+      "subject": "Task 8: macOS CI",
+      "status": "pending",
+      "blockedBy": [4],
+      "description": "**Goal:** Build the Swift package and run its tests on every PR.\n\n**Files:**\n- Modify: .github/workflows/pr-check.yml\n\n**Acceptance Criteria:**\n- A new apple job runs on macos-26\n- It runs swift test and task apple:auth\n- Derived data is cached, keyed on Package.resolved and project.yml\n- No App token step — both dependencies are public\n- The three existing jobs are untouched and keep their exact names\n- The new job is not added to branch protection in this task\n- Its wall-clock duration is recorded in the PR body\n\n**Verify:** gh pr checks <PR>\n\n```json:metadata\n{\"files\": [\".github/workflows/pr-check.yml\"], \"verifyCommand\": \"gh pr checks <PR> --repo cafecito-games/FoundryKit\", \"acceptanceCriteria\": [\"apple job green on macos-26\", \"existing three job names unchanged\", \"duration recorded in the PR body\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-08-02"
+}
