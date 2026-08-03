@@ -21,9 +21,9 @@ import games.cafecito.foundrykit.core
 ## [b]The [code]state[/code] comparison is what makes a callback trustworthy.[/b] The
 ## loopback port is reachable by any process on the machine, so a callback arriving on it
 ## is not by itself evidence that this flow asked for it. A mismatch fails the sign-in
-## [i]before[/i] the code is exchanged: exchanging an attacker's code and then reporting a
-## failure would be the exact attack [code]state[/code] exists to prevent, and it is
-## invisible to a test that only inspects the returned result.
+## [i]before[/i] anything else in the callback is acted on: exchanging an attacker's code
+## and then reporting a failure would be the exact attack [code]state[/code] exists to
+## prevent, and it is invisible to a test that only inspects the returned result.
 ##
 ## [b]The listener is stopped on exactly one path[/b] — after [method _run_flow] returns,
 ## whichever way it ended. A [TCPServer] left listening holds its port for the lifetime of
@@ -216,7 +216,12 @@ async func _run_flow(listener: LoopbackServer) -> CredentialResult:
 	# known until the listener has bound.
 	var redirect_uri: String = listener.redirect_uri()
 	var pkce: PkcePair = PkcePair.generate()
-	var url: String = build_authorization_url(_config, pkce, redirect_uri, _new_nonce())
+	# Snapshotted, not reread. One sign-in is one OAuth transaction against one client ID,
+	# and there are two suspension points between here and the credential — a
+	# [method configure] landing in either of them would otherwise send one client ID to the
+	# authorization endpoint and a different one to the token endpoint.
+	var config: ProviderConfig = _config
+	var url: String = build_authorization_url(config, pkce, redirect_uri, _new_nonce())
 
 	if not _hand_to_browser(url):
 		# No browser means no consent screen, so waiting out the watchdog for a callback
@@ -228,7 +233,7 @@ async func _run_flow(listener: LoopbackServer) -> CredentialResult:
 	var outcome: LoopbackOutcome = await listener.await_callback(_callback_timeout_seconds)
 	match outcome:
 		LoopbackOutcome.Received(query):
-			return await _credential_from_callback(query, pkce, redirect_uri)
+			return await _credential_from_callback(query, config, pkce, redirect_uri)
 		LoopbackOutcome.TimedOut(elapsed_seconds):
 			return CredentialResult.Failure(AuthError.TimedOut(elapsed_seconds))
 		LoopbackOutcome.Failed(detail):
@@ -237,25 +242,26 @@ async func _run_flow(listener: LoopbackServer) -> CredentialResult:
 			return CredentialResult.Failure(AuthError.RequestFailed(0, detail))
 	return CredentialResult.Failure(AuthError.Unavailable(Provider.GOOGLE))
 
-## Interprets one delivered callback, and exchanges its code only if it can be trusted.
+## Interprets one delivered callback, and acts on it only if it can be trusted.
 ##
-## [code]error[/code] is read first and reported as a cancellation. RFC 6749 §4.1.2.1
-## allows several codes there, but every one of them reaching a loopback redirect means the
-## same thing to the player: the sign-in did not happen. A caller shown a fault dialog for
-## someone pressing Cancel has been misinformed by this backend.
+## [b][code]state[/code] is compared before anything else is read[/b] — before the code, and
+## before [code]error[/code]. Any process on the machine can reach the loopback port, so
+## nothing a callback says is evidence this flow asked for it until its state matches.
+## Exchanging first and failing afterwards would hand an attacker's code to the token
+## endpoint under this client's identity; reporting an unauthenticated
+## [code]error[/code] as a cancellation would tell the caller the player pressed Cancel
+## when the player never saw a screen. RFC 6749 §4.1.2.1 requires the server to echo
+## [code]state[/code] on an error response for exactly this reason.
 ##
-## [code]state[/code] is compared before [code]code[/code] is even read. Any process on the
-## machine can reach the loopback port, so a callback carrying a plausible code is not
-## evidence this flow asked for it. Exchanging first and failing afterwards would hand an
-## attacker's code to the token endpoint under this client's identity.
+## A matching [code]error[/code] is a cancellation. The RFC allows several codes there, but
+## every one of them reaching a loopback redirect means the same thing to the player: the
+## sign-in did not happen. A caller shown a fault dialog for someone pressing Cancel has
+## been misinformed by this backend.
 async func _credential_from_callback(
 		query: Dictionary[String, String],
+		config: ProviderConfig,
 		pkce: PkcePair,
 		redirect_uri: String) -> CredentialResult:
-	if query.has("error"):
-		_log.debug("the authorization callback reported \"%s\"" % query["error"])
-		return CredentialResult.Failure(AuthError.Cancelled)
-
 	var returned_state: String = ""
 	if query.has("state"):
 		returned_state = query["state"]
@@ -264,13 +270,17 @@ async func _credential_from_callback(
 		return CredentialResult.Failure(AuthError.InvalidResponse(
 				"the authorization callback carried a state this flow did not send"))
 
+	if query.has("error"):
+		_log.debug("the authorization callback reported \"%s\"" % query["error"])
+		return CredentialResult.Failure(AuthError.Cancelled)
+
 	var code: String = ""
 	if query.has("code"):
 		code = query["code"]
 	if code.is_empty():
 		return CredentialResult.Failure(AuthError.MissingField("code"))
 
-	return await _exchange_code(code, pkce, redirect_uri)
+	return await _exchange_code(code, config, pkce, redirect_uri)
 
 ## Exchanges an authorization code for an ID token.
 ##
@@ -279,7 +289,10 @@ async func _credential_from_callback(
 ## which is precisely why PKCE replaces it here — the verifier proves this is the same
 ## client that made the authorization request.
 async func _exchange_code(
-		code: String, pkce: PkcePair, redirect_uri: String) -> CredentialResult:
+		code: String,
+		config: ProviderConfig,
+		pkce: PkcePair,
+		redirect_uri: String) -> CredentialResult:
 	var keys: PackedStringArray = [
 		"client_id",
 		"code",
@@ -288,7 +301,7 @@ async func _exchange_code(
 		"redirect_uri",
 	]
 	var values: PackedStringArray = [
-		_desktop_client_id_of(_config),
+		_desktop_client_id_of(config),
 		code,
 		pkce.code_verifier,
 		"authorization_code",
@@ -306,7 +319,7 @@ async func _exchange_code(
 			EXCHANGE_TIMEOUT_SECONDS)
 	match outcome:
 		HttpOutcome.Answered(status_code, body):
-			return _credential_from_token_response(status_code, body)
+			return _credential_from_token_response(status_code, body, config)
 		HttpOutcome.TransportFailed(detail):
 			return CredentialResult.Failure(AuthError.RequestFailed(0, detail))
 		HttpOutcome.TimedOut(elapsed_seconds):
@@ -325,7 +338,9 @@ async func _exchange_code(
 ## is all FoundryKit ever does with a token — whoever accepts this credential is the
 ## authority on what it says.
 func _credential_from_token_response(
-		status_code: int, body: PackedByteArray) -> CredentialResult:
+		status_code: int,
+		body: PackedByteArray,
+		config: ProviderConfig) -> CredentialResult:
 	var text: String = body.get_string_from_utf8()
 	if status_code < 200 or status_code >= 300:
 		return CredentialResult.Failure(AuthError.RequestFailed(status_code, text))
@@ -351,7 +366,7 @@ func _credential_from_token_response(
 			id_token,
 			Jwt.string_claim_from(id_token, "email"),
 			Jwt.string_claim_from(id_token, "name"),
-			_desktop_client_id_of(_config)))
+			_desktop_client_id_of(config)))
 
 ## Returns a fresh, unstarted listener from the injected factory.
 ##

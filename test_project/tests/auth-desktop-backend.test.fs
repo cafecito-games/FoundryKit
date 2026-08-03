@@ -337,6 +337,21 @@ func test_an_error_callback_is_a_cancellation() -> void:
 	Expect.that(_describe(await pending)).to_equal("fail:cancelled")
 	Expect.that(_transport.send_count).to_equal(0)
 
+## `state` is verified on an error callback too, not only on one carrying a code. Any local
+## process can send `error=access_denied` to the port; reporting that as a cancellation
+## would tell the caller the player pressed Cancel when the player never saw the screen.
+func test_an_error_callback_with_a_foreign_state_is_not_a_cancellation() -> void:
+	_configure()
+	var pending: Coroutine[CredentialResult] = _backend.sign_in(Provider.GOOGLE)
+	await _deliver("error=access_denied&state=not-the-state-we-sent")
+	Expect.that(_describe(await pending)).to_equal("fail:invalid_response")
+
+func test_an_error_callback_with_no_state_at_all_is_not_a_cancellation() -> void:
+	_configure()
+	var pending: Coroutine[CredentialResult] = _backend.sign_in(Provider.GOOGLE)
+	await _deliver("error=access_denied")
+	Expect.that(_describe(await pending)).to_equal("fail:invalid_response")
+
 func test_a_callback_without_a_code_reports_the_missing_field() -> void:
 	_configure()
 	var pending: Coroutine[CredentialResult] = _backend.sign_in(Provider.GOOGLE)
@@ -493,6 +508,22 @@ func test_each_sign_in_uses_fresh_pkce_material() -> void:
 	Expect.that(first_nonce.is_empty()).to_be_false()
 	Expect.that(first_nonce
 			== _parameter_of(_query_of(_browser.last_url), "nonce")).to_be_false()
+
+## One sign-in is one OAuth transaction against one client ID. Reading the configuration
+## again after the callback would let a reconfiguration between the authorization request
+## and the exchange send two different client IDs inside a single transaction, which the
+## authorization server rejects — and would stamp the credential with an audience its ID
+## token does not name.
+func test_reconfiguring_mid_flight_does_not_change_the_attempt_in_progress() -> void:
+	_configure()
+	_transport.enqueue(HttpOutcome.Answered(200, _token_body(_ID_TOKEN)))
+	var pending: Coroutine[CredentialResult] = _backend.sign_in(Provider.GOOGLE)
+	var state: String = _state_sent()
+	_backend.configure(ProviderConfig.Google("other-web-id", "other-ios-id", "other-desktop-id"))
+	await _deliver("code=auth-code&state=" + state.uri_encode())
+	var result: CredentialResult = await pending
+	Expect.that(_sent_parameter("client_id")).to_equal(_DESKTOP_CLIENT_ID)
+	Expect.that(_google_fields(result).ends_with("|" + _DESKTOP_CLIENT_ID)).to_be_true()
 
 func test_sign_out_succeeds_because_there_is_nothing_native_to_sign_out_of() -> void:
 	_configure()
