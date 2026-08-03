@@ -593,6 +593,91 @@ func test_configuring_another_provider_does_not_clear_the_google_audience() -> v
 	await _subsystem.sign_in(Provider.GOOGLE)
 	Expect.that(_audience_sent()).to_equal("web-client-id")
 
+# --- The backend the session belongs to ---------------------------------------------------
+
+func test_configuring_a_backend_after_a_restore_ends_the_restored_session() -> void:
+	# Secure storage does not record which backend issued what it holds, so a session restored
+	# before any origin was named cannot be shown to belong to the one named afterwards. The
+	# alternative to dropping it is presenting stored tokens to a backend that may never have
+	# issued them, so a game configures the backend before it restores.
+	var subsystem: AuthSubsystem = AuthSubsystem.new(
+			_log, _transport, BackendConfig.new(), _backend)
+	_backend.restore_result = SessionResult.Success(_session("access-one", _REFRESH_TOKEN))
+	await subsystem.restore_session()
+	Expect.that(subsystem.has_session()).to_be_true()
+	subsystem.configure_backend(BackendConfig.new("https://api.example.com"))
+	Expect.that(subsystem.has_session()).to_be_false()
+
+func test_a_trailing_slash_on_the_same_origin_keeps_the_session() -> void:
+	# url_for collapses the doubled separator, so both forms address every path identically.
+	# Signing a player out over punctuation would be a defect, not caution.
+	await _install_session("access-one", _REFRESH_TOKEN)
+	_subsystem.configure_backend(BackendConfig.new("https://api.example.com/"))
+	Expect.that(_subsystem.has_session()).to_be_true()
+	Expect.that(_subsystem.access_token()).to_equal("access-one")
+
+func test_a_credential_is_not_exchanged_at_a_backend_moved_while_the_sheet_was_open() -> void:
+	# The player is in front of the native sheet when the game moves the backend. The
+	# credential the sheet produces was obtained for the backend the sign-in began against;
+	# posting it to the replacement discloses it to a service the player never authorized,
+	# and unlike every other guard here that cannot be undone after the fact.
+	_backend.credential_result = CredentialResult.Success(_google_credential())
+	_backend.suspends = true
+	var pending: Coroutine[SessionResult] = _subsystem.sign_in(Provider.GOOGLE)
+	_subsystem.configure_backend(BackendConfig.new("https://other.example.com"))
+	_backend.release()
+	Expect.that(_describe_session(await pending)).to_equal("fail:cancelled")
+	Expect.that(_transport.send_count).to_equal(0)
+	Expect.that(_subsystem.has_session()).to_be_false()
+
+func test_correcting_a_path_on_the_same_origin_keeps_the_session() -> void:
+	await _install_session("access-one", _REFRESH_TOKEN)
+	_subsystem.configure_backend(BackendConfig.new(
+			"https://api.example.com", "/exchange", "/refresh", "/sign-out"))
+	Expect.that(_subsystem.has_session()).to_be_true()
+	Expect.that(_subsystem.access_token()).to_equal("access-one")
+
+func test_moving_to_a_different_origin_ends_the_session() -> void:
+	# Neither token is a credential at the new backend, and presenting one there would hand a
+	# second service the credential the first issued.
+	await _install_session("access-one", _REFRESH_TOKEN)
+	_subsystem.configure_backend(BackendConfig.new("https://other.example.com"))
+	Expect.that(_subsystem.has_session()).to_be_false()
+	Expect.that(_subsystem.access_token()).to_equal("")
+
+func test_moving_to_a_different_origin_announces_nothing() -> void:
+	# The consumer ended the session on purpose by moving the backend. Nothing lapsed, so
+	# reporting an expiry would send the game down its session-lost path over its own call.
+	await _install_session("access-one", _REFRESH_TOKEN)
+	_subsystem.configure_backend(BackendConfig.new("https://other.example.com"))
+	Expect.that(_session_expired_count).to_equal(0)
+	Expect.that(_tokens_refreshed_count).to_equal(0)
+
+func test_a_refused_request_is_not_replayed_against_a_backend_moved_under_it() -> void:
+	# The first attempt was authorized at the original backend and refused there. Refreshing
+	# and replaying after the move would send the previous backend's refresh token to the new
+	# one, then execute the request against a service the caller never addressed.
+	var transport: SuspendingTransport = SuspendingTransport.new(_transport)
+	var subsystem: AuthSubsystem = AuthSubsystem.new(_log, transport, _config, _backend)
+	_backend.restore_result = SessionResult.Success(_session("access-one", "refresh-one"))
+	await subsystem.restore_session()
+
+	_transport.enqueue(HttpOutcome.Answered(401, PackedByteArray()))
+	_transport.enqueue(HttpOutcome.Answered(200, _fresh_session_json()))
+	transport.suspend_on_send = 1
+	var pending: Coroutine[ResponseResult] = subsystem.request(HttpMethod.GET, "/me", null)
+
+	await transport.parked
+	subsystem.configure_backend(BackendConfig.new("https://other.example.com"))
+	transport.release()
+
+	Expect.that(_describe_response(await pending)).to_equal("fail:session_expired")
+	# One send: the refused first attempt. The refresh that would have carried the previous
+	# backend's refresh token to the new one never reached the transport, and no replay
+	# followed it.
+	Expect.that(_transport.send_count).to_equal(1)
+	Expect.that(subsystem.has_session()).to_be_false()
+
 # --- Storage delegation -----------------------------------------------------------------
 
 func test_restore_session_installs_what_the_backend_returned() -> void:

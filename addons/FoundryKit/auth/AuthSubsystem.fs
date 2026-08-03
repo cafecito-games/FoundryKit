@@ -110,6 +110,16 @@ var _session_generation: int = 0
 ## abandon the requests that were in flight when it opened.
 var _sign_in_generation: int = 0
 
+## Counts the times the configured backend origin was moved.
+##
+## Deliberately separate from [member _session_generation], because the two answer different
+## questions: that one asks whether the session a call began under is still held, this one
+## whether the backend it began against is still the one configured. A sign-in suspended in
+## front of a native sheet still exchanges its credential when the session changed meanwhile
+## and then discards the result — but it must not exchange it at all once the backend has
+## moved, because that posts a credential obtained for one service to another.
+var _backend_generation: int = 0
+
 ## The Google web client ID the exchange presents as the credential's audience.
 ##
 ## Learned from [method configure]; see [method _resolved_audience] for why the exchange,
@@ -166,6 +176,64 @@ func configure(config: ProviderConfig) -> void:
 	_google_audience = _audience_of(config, _google_audience)
 	_backend.configure(config)
 
+## Points this subsystem at the backend that issues and renews sessions.
+##
+## Keeps the values, not the object. [BackendClient] holds the very [BackendConfig] instance
+## this subsystem was built with, so copying into that instance reconfigures every layer at
+## once; rebuilding the client instead would take the [SessionStore] built over it — and the
+## session it holds — with it. Keeping the caller's instance would also let a consumer that
+## edits it later move the backend under requests already running against the old one.
+##
+## [b]A session belongs to the origin it was obtained under.[/b] Tokens issued by one backend
+## are not credentials at another: presenting them would disclose one service's access token,
+## or its refresh token, to a second service that has no business holding either. So naming a
+## different origin — including naming one for the first time while a session restored from
+## secure storage is already held, whose issuer this subsystem has no record of — ends the
+## session through [method _forget]. That also advances the session generation, which is what
+## stops a refresh, a retry or a restore already in flight from completing across the move.
+## Nothing is announced: the consumer moved the backend on purpose, so the session did not
+## lapse, it was ended.
+##
+## The practical consequence is that a game configures the backend before it restores. Doing
+## it the other way round discards the restored session, which is the honest outcome — the
+## alternative is presenting stored tokens to a backend that may not have issued them.
+##
+## Correcting a path on the same origin is not a move and leaves the session alone, and
+## neither is a base URL that differs only by a trailing slash: [method BackendConfig.url_for]
+## resolves both forms to the same endpoint, so treating them as a move would sign a player
+## out over punctuation.
+func configure_backend(config: BackendConfig) -> void:
+	var previous_origin: String = _origin_of(_config.base_url)
+	_config.base_url = config.base_url
+	_config.exchange_path = config.exchange_path
+	_config.refresh_path = config.refresh_path
+	_config.sign_out_path = config.sign_out_path
+	_log.debug("configured the auth backend at '%s'" % _config.base_url)
+	if previous_origin == _origin_of(_config.base_url):
+		return
+	_backend_generation += 1
+	_log.debug("dropping the session held against the previous auth backend")
+	_forget()
+
+## Returns the comparable form of [param base_url].
+##
+## A trailing slash is dropped because [method BackendConfig.url_for] already collapses the
+## doubled separator it would produce: two base URLs differing only there address every path
+## identically, so they are the same origin and moving between them is not a move.
+func _origin_of(base_url: String) -> String:
+	return base_url.rstrip("/")
+
+## Returns an independent copy of the backend configuration in force.
+##
+## A copy for the same reason [method configure_backend] takes one: a caller that mutated
+## what this handed back would move the backend without ever passing through configuration.
+func backend_config() -> BackendConfig:
+	return BackendConfig.new(
+			_config.base_url,
+			_config.exchange_path,
+			_config.refresh_path,
+			_config.sign_out_path)
+
 func is_available(provider: Provider) -> bool:
 	return _backend.is_available(provider)
 
@@ -180,13 +248,16 @@ func is_configured(provider: Provider) -> bool:
 async func sign_in(provider: Provider) -> SessionResult:
 	_sign_in_generation += 1
 	var generation: int = _session_generation
-	return await _exchange(await _backend.sign_in(provider), generation)
+	var backend_generation: int = _backend_generation
+	return await _exchange(await _backend.sign_in(provider), generation, backend_generation)
 
 ## Attempts sign-in without UI and exchanges the credential it produces.
 async func sign_in_silent(provider: Provider) -> SessionResult:
 	_sign_in_generation += 1
 	var generation: int = _session_generation
-	return await _exchange(await _backend.sign_in_silent(provider), generation)
+	var backend_generation: int = _backend_generation
+	return await _exchange(
+			await _backend.sign_in_silent(provider), generation, backend_generation)
 
 ## Signs out of the native provider and drops the session.
 ##
@@ -391,12 +462,15 @@ func _result_of_retry(
 ##
 ## Exhaustive over [CredentialResult]; the trailing return exists only because the analyser
 ## cannot see that the match is total.
-async func _exchange(credential_result: CredentialResult, generation: int) -> SessionResult:
+async func _exchange(
+		credential_result: CredentialResult,
+		generation: int,
+		backend_generation: int) -> SessionResult:
 	match credential_result:
 		CredentialResult.Failure(error):
 			return SessionResult.Failure(error)
 		CredentialResult.Success(credential):
-			return await _exchange_credential(credential, generation)
+			return await _exchange_credential(credential, generation, backend_generation)
 	return SessionResult.Failure(AuthError.InvalidResponse(
 			"the backend reported a credential result this subsystem does not understand"))
 
@@ -404,7 +478,15 @@ async func _exchange(credential_result: CredentialResult, generation: int) -> Se
 ##
 ## The request carries no bearer credential: there is no session yet, and the credential
 ## being exchanged travels in the body.
-async func _exchange_credential(credential: Credential, generation: int) -> SessionResult:
+##
+## The backend generation is checked before the request rather than after it, unlike every
+## other guard here. Those decide what to do with an answer already obtained; this one decides
+## whether to disclose the credential at all, and there is no undoing that once it is sent.
+async func _exchange_credential(
+		credential: Credential, generation: int, backend_generation: int) -> SessionResult:
+	if backend_generation != _backend_generation:
+		_log.debug("not exchanging a credential at a backend configured since it was obtained")
+		return SessionResult.Failure(AuthError.Cancelled)
 	var provider: Provider = Credential.provider_of(credential)
 	_log.debug("exchanging a credential for provider %d" % provider)
 	var response: ResponseResult = await _client.request(
