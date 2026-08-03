@@ -195,6 +195,18 @@ func test_percent_encoded_values_are_decoded() -> void:
 	Expect.that(query.get("code", "")).to_equal("a/b=c")
 	Expect.that(query.get("state", "")).to_equal("x y")
 
+## Telling someone who has just pressed Cancel that they are signed in is a lie the player
+## acts on, and the listener is the only participant with a page in front of them.
+func test_a_refused_callback_is_not_answered_with_a_success_page() -> void:
+	var server: LoopbackServer = _started_server()
+	var pending: Coroutine[LoopbackOutcome] = server.await_callback(_GENEROUS_TIMEOUT_SECONDS)
+	var client: StreamPeerTCP = await _connect_and_send(
+			server.port(), "GET /?error=access_denied&state=xyz HTTP/1.1\r\n\r\n")
+	await pending
+	var response: String = await _read_response(client)
+	Expect.that(response.contains("You are signed in")).to_be_false()
+	Expect.that(response.contains("Sign-in was not completed")).to_be_true()
+
 func test_an_error_callback_is_delivered_like_any_other() -> void:
 	var server: LoopbackServer = _started_server()
 	var pending: Coroutine[LoopbackOutcome] = server.await_callback(_GENEROUS_TIMEOUT_SECONDS)
@@ -305,3 +317,27 @@ func test_an_oversized_request_line_is_refused() -> void:
 	var outcome: LoopbackOutcome = await pending
 	Expect.that(_describe(outcome)).to_equal(
 			"failed:the request line exceeded %d bytes" % LoopbackServer.MAX_REQUEST_BYTES)
+
+## The bypass a cap tested only against an unterminated buffer would leave open: one read
+## can deliver a whole oversized line, newline and all.
+func test_an_oversized_request_line_that_arrives_complete_is_refused() -> void:
+	var server: LoopbackServer = _started_server()
+	var pending: Coroutine[LoopbackOutcome] = server.await_callback(_GENEROUS_TIMEOUT_SECONDS)
+	var oversized: String = "GET /?code=%s HTTP/1.1\r\n\r\n" % (
+			"a".repeat(LoopbackServer.MAX_REQUEST_BYTES + 64))
+	await _connect_and_send(server.port(), oversized)
+	var outcome: LoopbackOutcome = await pending
+	Expect.that(_describe(outcome)).to_equal(
+			"failed:the request line exceeded %d bytes" % LoopbackServer.MAX_REQUEST_BYTES)
+
+## The cap bounds the request line, not the request. A browser sending several kibibytes of
+## cookies with an ordinary callback is not an abusive peer, and refusing it would break
+## sign-in on exactly the machines that have signed in before.
+func test_large_headers_after_a_short_request_line_are_accepted() -> void:
+	var server: LoopbackServer = _started_server()
+	var pending: Coroutine[LoopbackOutcome] = server.await_callback(_GENEROUS_TIMEOUT_SECONDS)
+	var request: String = "GET /?code=abc&state=xyz HTTP/1.1\r\nCookie: %s\r\n\r\n" % (
+			"c".repeat(LoopbackServer.MAX_REQUEST_BYTES * 2))
+	await _connect_and_send(server.port(), request)
+	var outcome: LoopbackOutcome = await pending
+	Expect.that(_describe(outcome)).to_equal("received:abc:xyz")

@@ -60,8 +60,23 @@ const _SUCCESS_PAGE: String = """<!DOCTYPE html>
 </html>
 """
 
+## What the browser shows when the callback reports an error rather than a code.
+##
+## Deliberately vague about which error it was: the query is the caller's to interpret, and
+## a page in a browser is not where a player finds out why. It must simply not claim a
+## success that did not happen.
+const _REFUSED_PAGE: String = """<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Sign-in was not completed</title></head>
+<body style="font-family: system-ui, sans-serif; text-align: center; padding: 4rem;">
+<h1>Sign-in was not completed</h1>
+<p>You can close this tab and return to the game.</p>
+</body>
+</html>
+"""
+
 ## What the browser shows when the request could not be read at all.
-const _ERROR_PAGE: String = """<!DOCTYPE html>
+const _UNREADABLE_PAGE: String = """<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><title>Sign-in failed</title></head>
 <body style="font-family: system-ui, sans-serif; text-align: center; padding: 4rem;">
@@ -219,22 +234,36 @@ func _poll_once() -> void:
 		_request += connection.get_utf8_string(available)
 
 	var newline: int = _request.find("\n")
-	if newline >= 0:
-		_complete(connection, _request.substr(0, newline).strip_edges())
+	if newline < 0:
+		if _request.length() > MAX_REQUEST_BYTES:
+			# Nothing terminating the line yet and already past the cap, so no amount of
+			# further reading can produce an acceptable one.
+			_refuse_oversized(connection)
+			return
+		if connection.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+			# The peer went away before finishing its request line. Reporting it beats
+			# waiting out the full watchdog window for a browser that is no longer there.
+			_resolve(LoopbackOutcome.Failed(
+					"the peer closed the connection before sending a request"))
 		return
 
-	if _request.length() > MAX_REQUEST_BYTES:
-		_log.warn("a loopback peer sent an oversized request line")
-		_write_response(connection, "400 Bad Request", _ERROR_PAGE)
-		_resolve(LoopbackOutcome.Failed(
-				"the request line exceeded %d bytes" % MAX_REQUEST_BYTES))
+	# The cap is checked against the completed line, not against the buffer, and only once
+	# the line is known to be complete. A single read can deliver a whole oversized line
+	# terminator and all, so testing the cap only while the line is still unterminated would
+	# let exactly that case through. Measuring the line rather than the buffer is equally
+	# deliberate: everything after the first newline is headers, and a browser sending a few
+	# kibibytes of cookies must not be mistaken for an abusive peer.
+	var request_line: String = _request.substr(0, newline).strip_edges()
+	if request_line.length() > MAX_REQUEST_BYTES:
+		_refuse_oversized(connection)
 		return
+	_complete(connection, request_line)
 
-	if connection.get_status() != StreamPeerTCP.STATUS_CONNECTED:
-		# The peer went away before finishing its request line. Reporting it beats waiting
-		# out the full watchdog window for a browser that is no longer there.
-		_resolve(LoopbackOutcome.Failed(
-				"the peer closed the connection before sending a request"))
+func _refuse_oversized(connection: StreamPeerTCP) -> void:
+	_log.warn("a loopback peer sent an oversized request line")
+	_write_response(connection, "400 Bad Request", _UNREADABLE_PAGE)
+	_resolve(LoopbackOutcome.Failed(
+			"the request line exceeded %d bytes" % MAX_REQUEST_BYTES))
 
 ## Takes the pending connection, if there is not one already. Returns whether there is a
 ## connection to read from.
@@ -258,9 +287,21 @@ func _accept_connection() -> bool:
 ## The reply is written before the wait is resolved because [method _resolve] closes the
 ## socket. Without it the player sees a browser error page on a sign-in that in fact
 ## succeeded, which is the most confusing failure this class can produce.
+##
+## A callback carrying [code]error[/code] is answered with a page that does not claim
+## success. That is the one piece of OAuth vocabulary this class knows, and it is
+## unavoidable: it is the only participant with a page in front of the player, so telling
+## someone who has just pressed Cancel that they are signed in would be a plain lie. What
+## the error [i]means[/i] — cancellation, a refused scope, a misconfigured client — stays
+## the caller's to decide; the outcome it receives is an ordinary [code]Received[/code]
+## either way (RFC 6749 §4.1.2.1).
 func _complete(connection: StreamPeerTCP, request_line: String) -> void:
-	_write_response(connection, "200 OK", _SUCCESS_PAGE)
-	_resolve(LoopbackOutcome.Received(_query_of(request_line)))
+	var query: Dictionary[String, String] = _query_of(request_line)
+	if query.has("error"):
+		_write_response(connection, "200 OK", _REFUSED_PAGE)
+	else:
+		_write_response(connection, "200 OK", _SUCCESS_PAGE)
+	_resolve(LoopbackOutcome.Received(query))
 
 ## Parses the query string of a request line such as
 ## [code]GET /?code=abc&state=xyz HTTP/1.1[/code].
