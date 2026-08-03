@@ -17,10 +17,16 @@ func _init(log: FoundryKitLog) -> void:
 
 ## Returns the platform backend, or null when none applies.
 ##
-## Every platform returns null today because no native backend exists yet: epic B adds the
-## Apple backend, epic F the Android one, and epic D the desktop OAuth backend. Until then
-## the Null backend is the correct answer everywhere, not a placeholder.
-func for_platform(_platform: PlatformKind) -> AuthBackend?:
+## Android is epic F and the desktop OAuth loopback is epic D; both still fall back to the
+## Null backend, which is the correct answer until those exist. The Apple backend is
+## returned whether or not its binary is installed — it probes [ClassDB] itself and reports
+## unavailable when the class is absent, so routing never depends on the binary.
+func for_platform(platform: PlatformKind) -> AuthBackend?:
+	match platform:
+		PlatformKind.IOS, PlatformKind.MACOS:
+			return AppleAuthBackend.new(_log)
+		PlatformKind.ANDROID, PlatformKind.DESKTOP, PlatformKind.UNKNOWN:
+			return null
 	return null
 
 func null_backend() -> AuthBackend:
