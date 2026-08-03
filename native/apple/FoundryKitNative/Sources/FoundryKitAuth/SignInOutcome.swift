@@ -67,6 +67,15 @@ func validatedClientID(_ raw: String?) -> String? {
     return raw
 }
 
+/// Maps a caller-supplied nonce onto the value GoogleSignIn expects.
+///
+/// An empty nonce means the caller did not ask for replay binding of its own, and must
+/// become `nil` so the SDK generates a fresh per-request nonce. Passing the empty string
+/// through would install a constant, zero-entropy nonce on every request instead.
+func normalizedNonce(_ raw: String) -> String? {
+    raw.isEmpty ? nil : raw
+}
+
 /// Computes the reversed-client-ID URL scheme GoogleSignIn expects in the host
 /// app's Info.plist.
 func reversedClientID(_ iosClientID: String) -> String {

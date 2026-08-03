@@ -49,6 +49,13 @@ class iOSGoogleSignIn: RefCounted {
     /// attributable to the request that caused it.
     private var inFlightRequestToken: String?
 
+    /// Set when `signOut` runs while a sign-in is still in flight.
+    ///
+    /// GoogleSignIn offers no way to cancel a started flow, so the credential it stores
+    /// when that flow finishes would silently undo the sign-out. The flag makes the late
+    /// reply discard that credential and report the sign-in as cancelled instead.
+    private var signedOutWhileInFlight = false
+
     /// Configures GoogleSignIn. The iOS/macOS client ID comes from the host app's
     /// `Info.plist` (`GIDClientID`); `webClientId` becomes the `serverClientID` so the
     /// returned ID token is minted for the game's backend.
@@ -92,7 +99,8 @@ class iOSGoogleSignIn: RefCounted {
         }
         inFlightRequestToken = requestToken
         GIDSignIn.sharedInstance.signIn(
-            withPresenting: anchor, hint: nil, additionalScopes: nil, nonce: nonce
+            withPresenting: anchor, hint: nil, additionalScopes: nil,
+            nonce: normalizedNonce(nonce)
         ) { [weak self] result, error in
             let outcome = extractOutcome(user: result?.user, error: error)
             MainActor.assumeIsolated {
@@ -124,16 +132,29 @@ class iOSGoogleSignIn: RefCounted {
 
     @Callable
     func signOut(requestToken: String) {
+        if inFlightRequestToken != nil {
+            signedOutWhileInFlight = true
+        }
         GIDSignIn.sharedInstance.signOut()
         signOutComplete.emit(requestToken)
     }
 
     /// Releases the in-flight slot and emits the outcome that answers `requestToken`.
+    ///
+    /// A sign-out issued while the request was in flight wins: the credential the flow
+    /// just stored is discarded and the request reports cancellation, so the player is
+    /// left signed out as they asked.
     private func settle(_ outcome: SignInOutcome, requestToken: String) {
+        var resolved = outcome
         if inFlightRequestToken == requestToken {
             inFlightRequestToken = nil
+            if signedOutWhileInFlight {
+                signedOutWhileInFlight = false
+                GIDSignIn.sharedInstance.signOut()
+                resolved = .cancelled
+            }
         }
-        emit(outcome, requestToken: requestToken)
+        emit(resolved, requestToken: requestToken)
     }
 
     private func emit(_ outcome: SignInOutcome, requestToken: String) {

@@ -40,6 +40,14 @@ final class SignInOutcomeTests: XCTestCase {
                 urlSchemes: ["com.googleusercontent.apps.999-zzz"]))
     }
 
+    func testEmptyNonceLeavesTheSDKToGenerateOne() {
+        XCTAssertNil(normalizedNonce(""))
+    }
+
+    func testSuppliedNonceIsPassedThrough() {
+        XCTAssertEqual(normalizedNonce("abc123"), "abc123")
+    }
+
     func testOutcomeCarriesTokenAndProfile() {
         let outcome = SignInOutcome.success(
             idToken: "id", email: "a@b.c", displayName: "Ada")
