@@ -342,6 +342,19 @@ func test_an_oversized_run_of_whitespace_is_refused() -> void:
 	Expect.that(_describe(outcome)).to_equal(
 			"failed:the request line exceeded %d bytes" % LoopbackServer.MAX_REQUEST_BYTES)
 
+## The cap is a memory bound, so it counts bytes. A line of 3-byte characters is three times
+## the size its character count suggests, and a check on characters would wave it through.
+func test_a_multibyte_line_within_the_character_count_but_over_the_byte_cap_is_refused() -> void:
+	var server: LoopbackServer = _started_server()
+	var pending: Coroutine[LoopbackOutcome] = server.await_callback(_GENEROUS_TIMEOUT_SECONDS)
+	var characters: int = LoopbackServer.MAX_REQUEST_BYTES / 2
+	var multibyte: String = "GET /?code=%s HTTP/1.1\r\n\r\n" % "€".repeat(characters)
+	Expect.that(multibyte.length() < LoopbackServer.MAX_REQUEST_BYTES).to_be_true()
+	await _connect_and_send(server.port(), multibyte)
+	var outcome: LoopbackOutcome = await pending
+	Expect.that(_describe(outcome)).to_equal(
+			"failed:the request line exceeded %d bytes" % LoopbackServer.MAX_REQUEST_BYTES)
+
 ## A callback with neither a code nor an error is malformed, and the caller will reject it.
 ## Claiming success in the browser leaves the player told one thing and the game doing
 ## another.

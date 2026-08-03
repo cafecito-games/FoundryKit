@@ -101,6 +101,7 @@ var _log: FoundryKitLog
 var _server: TCPServer? = null
 var _connection: StreamPeerTCP? = null
 var _request: String = ""
+var _received_bytes: int = 0
 var _has_awaited: bool = false
 var _has_settled: bool = false
 var _settle_count: int = 0
@@ -231,11 +232,15 @@ func _poll_once() -> void:
 
 	var available: int = connection.get_available_bytes()
 	if available > 0:
+		# Counted here rather than derived from the buffer afterwards: the buffer holds
+		# decoded characters, and a character is up to four bytes, so its length would
+		# understate what the peer actually made this process hold.
+		_received_bytes += available
 		_request += connection.get_utf8_string(available)
 
 	var newline: int = _request.find("\n")
 	if newline < 0:
-		if _request.length() > MAX_REQUEST_BYTES:
+		if _received_bytes > MAX_REQUEST_BYTES:
 			# Nothing terminating the line yet and already past the cap, so no amount of
 			# further reading can produce an acceptable one.
 			_refuse_oversized(connection)
@@ -247,19 +252,21 @@ func _poll_once() -> void:
 					"the peer closed the connection before sending a request"))
 		return
 
-	# The cap is checked against the completed line, not against the buffer, and only once
-	# the line is known to be complete. A single read can deliver a whole oversized line
-	# terminator and all, so testing the cap only while the line is still unterminated would
-	# let exactly that case through. Measuring the line rather than the buffer is equally
-	# deliberate: everything after the first newline is headers, and a browser sending a few
-	# kibibytes of cookies must not be mistaken for an abusive peer.
-	# Measured before trimming, and on the raw line rather than on what survives trimming:
-	# a peer that pads a line with a mebibyte of spaces has still made this process hold a
-	# mebibyte, whatever the line collapses to afterwards.
-	if newline > MAX_REQUEST_BYTES:
+	# The cap is checked against the completed line, and only once the line is known to be
+	# complete: a single read can deliver a whole oversized line, terminator and all, so
+	# testing the cap only while the line is still unterminated would let exactly that case
+	# through. Measuring the line rather than everything read is equally deliberate —
+	# everything after the first newline is headers, and a browser sending a few kibibytes of
+	# cookies must not be mistaken for an abusive peer.
+	#
+	# Measured in bytes, before trimming. A peer that pads a line with a mebibyte of spaces,
+	# or spells it in four-byte characters, has made this process hold that much whatever the
+	# line collapses to or however few characters it turns out to be.
+	var raw_line: String = _request.substr(0, newline)
+	if raw_line.to_utf8_buffer().size() > MAX_REQUEST_BYTES:
 		_refuse_oversized(connection)
 		return
-	_complete(connection, _request.substr(0, newline).strip_edges())
+	_complete(connection, raw_line.strip_edges())
 
 func _refuse_oversized(connection: StreamPeerTCP) -> void:
 	_log.warn("a loopback peer sent an oversized request line")
