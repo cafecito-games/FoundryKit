@@ -19,6 +19,15 @@ signal tokens_refreshed(session: AuthSession)
 ## Applies configuration for one provider.
 abstract func configure(config: ProviderConfig) -> void
 
+## Points the implementation at the backend that issues and renews sessions.
+##
+## On the contract rather than only on the concrete subsystem because a game must call it:
+## without a [BackendConfig] carrying a base URL there is nowhere to exchange a credential,
+## and game code holds this trait precisely so a double can stand in for the real subsystem.
+## A configuration entry point reachable only through the concrete type would force every
+## consumer's bootstrap back onto that type and defeat the substitution.
+abstract func configure_backend(config: BackendConfig) -> void
+
 ## Returns whether a provider can be used on this platform.
 abstract func is_available(provider: Provider) -> bool
 

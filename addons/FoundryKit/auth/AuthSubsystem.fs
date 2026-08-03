@@ -166,6 +166,36 @@ func configure(config: ProviderConfig) -> void:
 	_google_audience = _audience_of(config, _google_audience)
 	_backend.configure(config)
 
+## Points this subsystem at the backend that issues and renews sessions.
+##
+## Keeps the values, not the object. [BackendClient] holds the very [BackendConfig] instance
+## this subsystem was built with, so copying into that instance reconfigures every layer at
+## once; rebuilding the client instead would take the [SessionStore] built over it — and the
+## session it holds — with it. Keeping the caller's instance would also let a consumer that
+## edits it later move the backend under requests already running against the old one.
+##
+## Reconfiguring mid-session is allowed and deliberately does not end the session: only the
+## consumer knows whether the new endpoint honours the tokens the old one issued, and
+## discarding a still-valid session on their behalf would sign a player out for a call that
+## may have changed nothing but a path.
+func configure_backend(config: BackendConfig) -> void:
+	_config.base_url = config.base_url
+	_config.exchange_path = config.exchange_path
+	_config.refresh_path = config.refresh_path
+	_config.sign_out_path = config.sign_out_path
+	_log.debug("configured the auth backend at '%s'" % _config.base_url)
+
+## Returns an independent copy of the backend configuration in force.
+##
+## A copy for the same reason [method configure_backend] takes one: a caller that mutated
+## what this handed back would move the backend without ever passing through configuration.
+func backend_config() -> BackendConfig:
+	return BackendConfig.new(
+			_config.base_url,
+			_config.exchange_path,
+			_config.refresh_path,
+			_config.sign_out_path)
+
 func is_available(provider: Provider) -> bool:
 	return _backend.is_available(provider)
 
