@@ -14,6 +14,11 @@ import games.cafecito.foundrykit.auth
 ## against a backend that rotates refresh tokens, where all but one are replaying a token
 ## the backend has already retired.
 ##
+## Coalescing stops at the session boundary: a round renews the session that was held when
+## it opened, so a caller that arrives after [method set_session] or [method clear] waits
+## for that round and then opens its own rather than accepting a result belonging to a
+## session it never asked about.
+##
 ## [b]The failure that matters.[/b] The dangerous defect here is not a fan-out, it is a
 ## round that never closes: an in-flight marker left standing by a failed refresh blocks
 ## every later refresh for the lifetime of the process, with no error and no log — the
@@ -56,6 +61,10 @@ var _rotation_count: int = 0
 ## Counts explicit changes to the held session, so a reply that arrives after one can be
 ## recognised as stale. See [method _install].
 var _session_generation: int = 0
+
+## The value of [member _session_generation] when the in-flight round opened, naming which
+## session that round is renewing. See [method refresh].
+var _refresh_generation: int = 0
 
 ## Builds a store over [param client]. The client is injected so every layer above can be
 ## driven against a scripted transport with no network.
@@ -131,9 +140,16 @@ func clear() -> void:
 ## A 401 from the refresh endpoint is [code]SessionExpired[/code] too: the refresh token
 ## itself has been rejected, so no retry can succeed.
 async func refresh() -> SessionResult:
-	if _refresh_in_flight:
+	while _refresh_in_flight:
+		# A round renews the session that was held when it opened, and only that one. A
+		# caller arriving after set_session or clear replaced that session is asking about a
+		# different one, so it must not take the round's result — that would report success
+		# for a session no request was ever made for, and would leave a replacement session
+		# unrefreshed. It waits for the round to close and then opens its own.
+		var renews_my_session: bool = _refresh_generation == _session_generation
 		var joined: SessionResult = await _refresh_settled
-		return joined
+		if renews_my_session:
+			return joined
 
 	var current: AuthSession? = _session
 	if current == null:
@@ -144,6 +160,7 @@ async func refresh() -> SessionResult:
 		return SessionResult.Failure(AuthError.SessionExpired(active.expires_at()))
 
 	_refresh_round += 1
+	_refresh_generation = _session_generation
 	_refresh_in_flight = true
 	_in_flight.append(self)
 	_run_refresh(_refresh_round, active, _session_generation)

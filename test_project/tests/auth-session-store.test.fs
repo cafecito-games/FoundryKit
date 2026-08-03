@@ -256,6 +256,39 @@ func test_setting_a_session_during_a_refresh_wins_over_the_reply() -> void:
 	Expect.that(_describe(result)).to_equal("ok:explicit-access-token")
 	Expect.that(_store.access_token()).to_equal("explicit-access-token")
 
+func test_a_refresh_asked_after_a_replacement_does_not_join_the_previous_round() -> void:
+	# The round already in flight is renewing the session that was just replaced. A caller
+	# arriving afterwards is asking about the replacement, so taking that round's result
+	# would report success for a session no request was ever made for — and would leave the
+	# replacement, which may itself be expired, unrenewed.
+	_store.set_session(_session(_EXPIRED_TOKEN, "refresh-a"))
+	_transport.enqueue(HttpOutcome.Answered(200, _fresh_session_json()))
+	var first: Coroutine[SessionResult] = _store.refresh()
+	_store.set_session(_session("access-b", "refresh-b"))
+	_transport.enqueue(HttpOutcome.Answered(200, _json({
+		"access_token": "access-c",
+		"refresh_token": "refresh-c",
+	})))
+	var second: Coroutine[SessionResult] = _store.refresh()
+	Expect.that(_describe(await first)).to_equal("ok:access-b")
+	Expect.that(_describe(await second)).to_equal("ok:access-c")
+	Expect.that(_transport.send_count).to_equal(2)
+	Expect.that(_transport.last_body.get_string_from_utf8()).to_equal(
+			"{\"refresh_token\":\"refresh-b\"}")
+	Expect.that(_store.access_token()).to_equal("access-c")
+
+func test_a_refresh_asked_after_a_clear_does_not_join_the_previous_round() -> void:
+	_store.set_session(_session(_EXPIRED_TOKEN, _REFRESH_TOKEN))
+	_transport.enqueue(HttpOutcome.Answered(200, _fresh_session_json()))
+	var first: Coroutine[SessionResult] = _store.refresh()
+	_store.clear()
+	var second: Coroutine[SessionResult] = _store.refresh()
+	Expect.that(_describe(await first)).to_equal("fail:session_expired:0")
+	Expect.that(_describe(await second)).to_equal("fail:session_expired:0")
+	# The signed-out store has nothing to present, so the second call reaches no backend.
+	Expect.that(_transport.send_count).to_equal(1)
+	Expect.that(_store.has_session()).to_be_false()
+
 func test_an_unconfigured_backend_fails_without_a_request() -> void:
 	var store: SessionStore = SessionStore.new(
 			_log, BackendClient.new(_log, _transport, BackendConfig.new()))
