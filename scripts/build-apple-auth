@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Builds the Apple auth extension binary and the shared core framework.
+#
+# Output:
+#   addons/FoundryKit/bin/auth/FoundryKitAuth.xcframework  (iOS device + simulator + macOS)
+#   addons/FoundryKit/bin/core/FoundryKitCore.framework    (macOS, shared dependency)
+#
+# Both are release artefacts, not source, and are gitignored.
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+package_dir="$repo_root/native/apple/FoundryKitNative"
+derived_data="$repo_root/.build/xcodebuild"
+auth_bin="$repo_root/addons/FoundryKit/bin/auth"
+core_bin="$repo_root/addons/FoundryKit/bin/core"
+
+source "$package_dir/scripts/apple-build-support"
+
+apple_require_tools
+apple_generate_project "$package_dir"
+apple_prepare_packages "$package_dir" "$derived_data" FoundryKitAuth_macOS
+
+apple_build FoundryKitAuth_iOS "generic/platform=iOS"
+apple_build FoundryKitAuth_iOS "generic/platform=iOS Simulator" CODE_SIGNING_ALLOWED=NO
+apple_build FoundryKitAuth_macOS "generic/platform=macOS"
+
+products="$derived_data/Build/Products"
+for framework in \
+	"$products/Release-iphoneos/FoundryKitAuth.framework" \
+	"$products/Release-iphonesimulator/FoundryKitAuth.framework" \
+	"$products/Release/FoundryKitAuth.framework" \
+	"$products/Release/FoundryKitCore.framework"; do
+	[[ -d "$framework" ]] || apple_fail "expected build product is missing: $framework"
+done
+
+mkdir -p "$auth_bin" "$core_bin"
+rm -rf "$auth_bin/FoundryKitAuth.xcframework" "$core_bin/FoundryKitCore.framework"
+
+xcodebuild -create-xcframework \
+	-framework "$products/Release-iphoneos/FoundryKitAuth.framework" \
+	-framework "$products/Release-iphonesimulator/FoundryKitAuth.framework" \
+	-framework "$products/Release/FoundryKitAuth.framework" \
+	-output "$auth_bin/FoundryKitAuth.xcframework"
+
+cp -R "$products/Release/FoundryKitCore.framework" "$core_bin/FoundryKitCore.framework"
+
+echo "PASS: built FoundryKitAuth.xcframework and FoundryKitCore.framework"

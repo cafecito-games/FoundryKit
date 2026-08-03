@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Shared helpers for the Apple native build and test entry points.
+#
+# Sourced, never executed. Callers set `derived_data` before calling `apple_build`.
+
+apple_fail() {
+	echo "ERROR: $*" >&2
+	exit 1
+}
+
+# Checks for every external tool the Apple build needs, naming the one that is missing
+# rather than letting xcodebuild fail later with a cryptic diagnostic.
+apple_require_tools() {
+	local tool
+	for tool in xcodegen xcodebuild curl unzip shasum python3; do
+		command -v "$tool" >/dev/null 2>&1 ||
+			apple_fail "$tool is required but was not found on PATH. Install it with: brew install $tool"
+	done
+}
+
+apple_generate_project() {
+	local package_dir=$1
+	(cd "$package_dir" && xcodegen generate)
+}
+
+# Clones the Swift package dependencies into the derived-data path and unpacks the
+# Foundry-Swift-Binary artifacts into that clone.
+#
+# xcodebuild keeps its own checkout under SourcePackages/, separate from the one
+# `swift build` uses, so the artifacts have to be prepared there too. Resolution itself
+# fails while the artifacts are missing — the checkout it writes on the way is what this
+# step is after — so its exit status is deliberately ignored.
+apple_prepare_packages() {
+	local package_dir=$1
+	local derived_data=$2
+	local scheme=$3
+
+	xcodebuild -resolvePackageDependencies \
+		-project "$package_dir/FoundryKitNative.xcodeproj" \
+		-scheme "$scheme" \
+		-derivedDataPath "$derived_data" >/dev/null 2>&1 || true
+
+	local checkout="$derived_data/SourcePackages/checkouts/Foundry-Swift-Binary"
+	[[ -d "$checkout" ]] ||
+		apple_fail "xcodebuild did not create the Foundry-Swift-Binary checkout at $checkout"
+
+	"$package_dir/scripts/prepare-foundryswift-binary" "$checkout"
+}
+
+# Builds one scheme for one destination.
+#
+# FoundrySwift.xcframework ships arm64 slices only, so every destination is pinned to
+# arm64; the default Release architecture list would add an x86_64 slice with nothing to
+# link against.
+apple_build() {
+	local scheme=$1
+	local destination=$2
+	shift 2
+
+	xcodebuild build \
+		-project "$package_dir/FoundryKitNative.xcodeproj" \
+		-scheme "$scheme" \
+		-destination "$destination" \
+		-configuration Release \
+		-derivedDataPath "$derived_data" \
+		-skipPackagePluginValidation \
+		-skipMacroValidation \
+		-quiet \
+		ARCHS=arm64 \
+		ONLY_ACTIVE_ARCH=NO \
+		"$@"
+}
