@@ -18,7 +18,7 @@
 
 | Fact | Consequence |
 |---|---|
-| `Platform.from_os_name` maps `Linux`/`Windows`/`X11`/`*BSD` → `DESKTOP`, and **`macOS` → `MACOS`, never `DESKTOP`** | Desktop OAuth reaches macOS only if the factory routes it there — see the open decision below |
+| `Platform.from_os_name` maps `Linux`/`Windows`/`X11`/`*BSD` → `DESKTOP`, and **`macOS` → `MACOS`, never `DESKTOP`** | Desktop OAuth reaches macOS only if the factory routes it there — resolved below: it does not |
 | `AuthBackendFactory.for_platform` routes `IOS, MACOS → AppleAuthBackend`; `ANDROID, DESKTOP, UNKNOWN → null` | Only the `DESKTOP` arm changes in the base plan |
 | `ProviderConfig.Google` already carries `desktop_client_id` | No config change needed for Google |
 | Epic C shipped `HttpTransport` (trait), `HttpClient`, `FakeHttpClient`, `BackendClient`, `SessionStore` | The token exchange goes through `HttpTransport`, so it is testable with no network |
@@ -28,26 +28,19 @@
 
 ---
 
-## OPEN DECISION — resolve before Task 5
+## RESOLVED DECISION — macOS does NOT fall back to desktop OAuth
 
-**Does macOS fall back to desktop OAuth when its native binary is absent?**
+**Decided by the owner, 2026-08-03: no composite.**
 
-Today `AuthBackendFactory` routes `MACOS → AppleAuthBackend`, and an `AppleAuthBackend` with no native class reports `is_available() == false` and fails `Unavailable`. That is **invariant 6** working as designed:
+`AuthBackendFactory` keeps routing `IOS, MACOS → AppleAuthBackend`. Desktop OAuth is **Linux and Windows only**. A macOS build shipped without `bin/auth/` continues to have no sign-in, and an `AppleAuthBackend` with no native class continues to report `is_available() == false`.
+
+**Invariant 6 is preserved exactly as written** and the spec is untouched:
 
 > A missing native binary and an unsupported platform resolve identically — to a Null backend reporting `is_available() == false`, never an error.
 
-A macOS **composite** — try native, fall back to desktop OAuth — would make a missing binary silently *work* via a different path. That is better UX and **directly contradicts invariant 6 as written.**
+The alternative — a `CompositeAuthBackend` that tries native and falls back to desktop OAuth — would have made a missing binary silently work through a different path. Better UX for one case; it contradicts the invariant, and amending a stated architectural invariant is not something to slip into an implementation PR.
 
-There is a real use case: a macOS build shipped without `bin/auth/` (a consumer avoiding the native dependency, or a Steam build) has no sign-in at all today, even though the desktop flow would work.
-
-| | Scope | Invariant 6 |
-|---|---|---|
-| **A. No composite** | macOS stays native-only; desktop OAuth is Linux/Windows only. Tasks 1–6 | Preserved unchanged |
-| **B. Composite** | Adds a `CompositeAuthBackend` and a macOS routing change. Tasks 1–7 | **Must be amended in the spec**, because a missing binary would no longer be indistinguishable from an unsupported platform |
-
-**Tasks 1–6 are identical either way.** Task 7 exists only under option B. Do not start Task 7 without an explicit decision recorded on the epic issue.
-
----
+If a macOS-without-native build turns out to matter in practice, the composite can be added later as its own issue with the spec change made deliberately. **Nothing in tasks 1–6 needs rework for that.**
 
 ## Two decisions already made, with reasoning
 
@@ -69,7 +62,6 @@ The legacy backend wrote the session to `user://authenticationkit_desktop_active
 | `addons/FoundryKit/auth/internal/PkcePair.fs` | `code_verifier` / `code_challenge` (S256) and `state` generation |
 | `addons/FoundryKit/auth/internal/DesktopAuthBackend.fs` | The flow; satisfies `AuthBackend` |
 | `addons/FoundryKit/auth/internal/AuthBackendFactory.fs` | **Modify** — route `DESKTOP` |
-| `addons/FoundryKit/auth/internal/CompositeAuthBackend.fs` | **Option B only** |
 | `test_project/tests/support/fake_browser.notest.fs` | Records the URL instead of opening it |
 | `test_project/tests/*.test.fs` | One suite per new type |
 
@@ -81,7 +73,7 @@ From `CLAUDE.md`, plus what epics A–C paid for. **Each of these cost someone a
 
 - **Awaiting a `Coroutine` that suspended and already completed hangs forever** (#107) — the suite *hangs* rather than fails. Never await a coroutine you started earlier; have callers await a shared signal emitted with `call_deferred`. This is live here: the loopback wait is exactly that shape.
 - **A signal declared in a cross-file trait is not flattened into the composer** (#107) — redeclare it on the composing class.
-- **A function whose return type is a TRAIT fails the runtime return check** when handed a composer (#107) — assign to a trait-typed member instead. **Option B's composite is squarely in this trap.**
+- **A function whose return type is a TRAIT fails the runtime return check** when handed a composer (#107) — assign to a trait-typed member instead. It bit #99 and #100; assume it will bite anything factory-shaped.
 - **Write `Closes #N` as PLAIN TEXT, never in backticks** — GitHub ignores closing keywords in code spans; a PR merged this way leaves its issue open and silently blocks epic closure. Verify with `gh pr view <PR> --json closingIssuesReferences`.
 - No `_` wildcard over a tagged union; a trailing `return` after an exhaustive `match` is required and is not a wildcard.
 - **Rest parameters must be untyped**; **`int(some_variant)` fails** under `unsafe_call_argument=2` — narrow with `raw is int`.
@@ -307,28 +299,6 @@ func test_state_mismatch_fails_without_exchanging_the_code() -> void:
 - [ ] **States plainly in a doc comment and in the PR body what is still unverified**: no real Google endpoint, no real browser, no real user consent. First real verification belongs to epic G
 
 **Verify:** `task test:foundrylib`
-
----
-
-### Task 7 — OPTION B ONLY: `CompositeAuthBackend`
-
-**Do not start without a recorded decision on the epic issue.** See "OPEN DECISION" above.
-
-**Goal:** On macOS, prefer the native backend and fall back to desktop OAuth when the native class is absent.
-
-**Files:**
-- Create: `addons/FoundryKit/auth/internal/CompositeAuthBackend.fs`
-- Modify: `addons/FoundryKit/auth/internal/AuthBackendFactory.fs`
-- Modify: `docs/superpowers/specs/2026-08-02-foundrykit-design.md` — **amend invariant 6**
-- Modify: `test_project/tests/auth-backend-factory.test.fs`, `test_project/tests/auth-composite-backend.test.fs`
-
-**Acceptance Criteria:**
-- [ ] Delegates per provider to the first composed backend reporting `is_available(provider)`
-- [ ] With the native class present, macOS behaves **exactly as today** — assert the desktop path is never entered
-- [ ] With it absent, Google sign-in goes through desktop OAuth
-- [ ] With neither available, the result is `Unavailable` — never an error
-- [ ] **The spec's invariant 6 is amended**, because a missing binary is no longer indistinguishable from an unsupported platform. Amend it honestly; do not quietly leave the spec contradicting the code
-- [ ] **A function returning a trait type fails the runtime return check** (#107) — assign to a trait-typed member; do not return `AuthBackend` from a helper
 
 ---
 

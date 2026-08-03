@@ -17,37 +17,42 @@
       "id": 3,
       "subject": "Task 3: The authorization URL",
       "status": "pending",
-      "blockedBy": [1, 2],
+      "blockedBy": [
+        1,
+        2
+      ],
       "description": "**Goal:** Build the Google authorization URL correctly, and prove it, before anything opens a browser.\n\n**Files:**\n- Create: addons/FoundryKit/auth/internal/DesktopAuthBackend.fs\n- Create: test_project/tests/auth-desktop-url.test.fs\n\n**Acceptance Criteria:**\n- Includes client_id, redirect_uri, response_type=code, scope, code_challenge, code_challenge_method=S256, state, nonce\n- EVERY value percent-encoded (an unencoded redirect_uri is the classic bug)\n- Redirect URI is http://127.0.0.1:<actual bound port>/\n- Uses desktop_client_id, never web_client_id or ios_client_id\n- Asserts the FULL url against an expected string with a fixed pair and port, not a substring check\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/internal/DesktopAuthBackend.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"all values percent-encoded\", \"desktop_client_id used\", \"full-url assertion\"]}\n```"
     },
     {
       "id": 4,
       "subject": "Task 4: DesktopAuthBackend - the flow",
       "status": "pending",
-      "blockedBy": [3],
+      "blockedBy": [
+        3
+      ],
       "description": "**Goal:** Compose PKCE, browser, loopback listener and token exchange into a backend returning a Credential.\n\n**Files:**\n- Modify: addons/FoundryKit/auth/internal/DesktopAuthBackend.fs\n- Create: test_project/tests/support/fake_browser.notest.fs, test_project/tests/auth-desktop-backend.test.fs\n\n**Acceptance Criteria:**\n- Satisfies AuthBackend via uses\n- HttpTransport, browser opener and LoopbackServer factory INJECTED - no test opens a browser or reaches the network\n- state mismatch fails AND does not exchange the code (assert send_count == 0)\n- error= in the callback -> AuthError.Cancelled, not a generic failure\n- missing code -> AuthError.MissingField(\"code\")\n- Success -> Credential.Google with audience set to desktop_client_id\n- APPLE and EMAIL_PASSWORD -> Unavailable\n- sign_in_silent -> Unavailable (no stored session; storage out of scope)\n- Listener stopped on EVERY exit path, proven by a port-leak test\n- Session storage returns AuthError.Storage\n- backend_name() == \"desktop\"\n\n**Mutation-check:** remove the state comparison and the stop-on-failure; confirm named tests fail.\n\n**Verify:** task test:foundrylib && task test:scripts\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/internal/DesktopAuthBackend.fs\"], \"verifyCommand\": \"task test:foundrylib && task test:scripts\", \"acceptanceCriteria\": [\"state mismatch does not exchange (send_count 0)\", \"listener stopped on every path\", \"audience is desktop_client_id\"]}\n```"
     },
     {
       "id": 5,
       "subject": "Task 5: Route DESKTOP in the factory",
       "status": "pending",
-      "blockedBy": [4],
+      "blockedBy": [
+        4
+      ],
       "description": "**Goal:** Linux and Windows resolve to the desktop backend.\n\n**Files:**\n- Modify: addons/FoundryKit/auth/internal/AuthBackendFactory.fs\n- Modify: test_project/tests/auth-backend-factory.test.fs\n\n**Acceptance Criteria:**\n- DESKTOP -> DesktopAuthBackend (\"desktop\")\n- IOS/MACOS still \"apple\"; ANDROID/UNKNOWN still \"null\"\n- Epic-ownership comment updated, not deleted (Android is epic F)\n- NO test asserts a platform-specific name for resolve_current() - the suite runs on macOS locally and ubuntu in CI; #75 already had to fix exactly this\n- The desktop backend constructs without a browser or network\n\n**Verify:** task test:foundrylib && task test:scripts && task lint\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/internal/AuthBackendFactory.fs\"], \"verifyCommand\": \"task test:foundrylib && task test:scripts && task lint\", \"acceptanceCriteria\": [\"DESKTOP routes to desktop\", \"other platforms unchanged\", \"resolve_current assertion stays platform-independent\"]}\n```"
     },
     {
       "id": 6,
       "subject": "Task 6: End-to-end desktop flow test",
       "status": "pending",
-      "blockedBy": [5],
+      "blockedBy": [
+        5
+      ],
       "description": "**Goal:** One test driving the whole flow through the seams, so composition is verified rather than only its parts.\n\n**Files:**\n- Modify: test_project/tests/auth-desktop-backend.test.fs\n\n**Acceptance Criteria:**\n- configure -> sign_in -> assert the browser got a URL carrying the expected code_challenge and state -> deliver a matching callback to the REAL LoopbackServer over a real loopback socket -> assert the transport received the code and code_verifier -> return a token -> assert Credential.Google\n- Asserts send_count == 1 for the exchange\n- States plainly, in a doc comment and the PR body, what remains unverified: no real Google endpoint, no real browser, no real consent. Epic G owns that.\n\n**Verify:** task test:foundrylib\n\n```json:metadata\n{\"files\": [\"test_project/tests/auth-desktop-backend.test.fs\"], \"verifyCommand\": \"task test:foundrylib\", \"acceptanceCriteria\": [\"full flow through real loopback socket\", \"send_count == 1\", \"limits stated explicitly\"]}\n```"
-    },
-    {
-      "id": 7,
-      "subject": "Task 7 (OPTION B ONLY): CompositeAuthBackend",
-      "status": "pending",
-      "blockedBy": [5],
-      "description": "**DO NOT START without a recorded decision on the epic issue.** See the plan's OPEN DECISION.\n\n**Goal:** On macOS, prefer the native backend and fall back to desktop OAuth when the native class is absent.\n\n**Files:**\n- Create: addons/FoundryKit/auth/internal/CompositeAuthBackend.fs\n- Modify: addons/FoundryKit/auth/internal/AuthBackendFactory.fs\n- Modify: docs/superpowers/specs/2026-08-02-foundrykit-design.md (AMEND INVARIANT 6)\n- Modify: test_project/tests/auth-backend-factory.test.fs, test_project/tests/auth-composite-backend.test.fs\n\n**Acceptance Criteria:**\n- Delegates per provider to the first composed backend reporting is_available(provider)\n- Native present: macOS behaves exactly as today; assert the desktop path is never entered\n- Native absent: Google goes through desktop OAuth\n- Neither available: Unavailable, never an error\n- Invariant 6 amended in the spec - a missing binary is no longer indistinguishable from an unsupported platform. Amend honestly; do not leave the spec contradicting the code\n- A function returning a TRAIT type fails the runtime return check (#107) - assign to a trait-typed member\n\n**Verify:** task test:foundrylib && task test:scripts && task lint\n\n```json:metadata\n{\"files\": [\"addons/FoundryKit/auth/internal/CompositeAuthBackend.fs\", \"docs/superpowers/specs/2026-08-02-foundrykit-design.md\"], \"verifyCommand\": \"task test:foundrylib && task test:scripts && task lint\", \"acceptanceCriteria\": [\"native-present path unchanged\", \"native-absent falls back\", \"invariant 6 amended in the spec\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-08-03"
+  "lastUpdated": "2026-08-03",
+  "decisions": {
+    "macos-composite": "Owner decided 2026-08-03: NO composite. macOS stays native-only; desktop OAuth is Linux/Windows only. Invariant 6 preserved, spec untouched. Task 7 dropped."
+  }
 }
