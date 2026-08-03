@@ -174,16 +174,28 @@ func configure(config: ProviderConfig) -> void:
 ## session it holds — with it. Keeping the caller's instance would also let a consumer that
 ## edits it later move the backend under requests already running against the old one.
 ##
-## Reconfiguring mid-session is allowed and deliberately does not end the session: only the
-## consumer knows whether the new endpoint honours the tokens the old one issued, and
-## discarding a still-valid session on their behalf would sign a player out for a call that
-## may have changed nothing but a path.
+## [b]Moving to a different origin ends the session.[/b] Tokens issued by one backend are not
+## credentials at another: presenting them would disclose one service's access token, or its
+## refresh token, to a second service that has no business holding either. So a change of
+## [member BackendConfig.base_url] drops the session through [method _forget], which also
+## advances the session generation — that is what stops a refresh or a retry already in
+## flight from completing against a backend the request it belongs to never began on.
+## Nothing is announced: the consumer moved the backend on purpose, so the session did not
+## lapse, it was ended.
+##
+## Configuring for the first time, and reconfiguring the same origin's paths, change no
+## origin and leave the session alone. A path correction must not sign a player out.
 func configure_backend(config: BackendConfig) -> void:
+	var previous_base_url: String = _config.base_url
 	_config.base_url = config.base_url
 	_config.exchange_path = config.exchange_path
 	_config.refresh_path = config.refresh_path
 	_config.sign_out_path = config.sign_out_path
 	_log.debug("configured the auth backend at '%s'" % _config.base_url)
+	if previous_base_url.is_empty() or previous_base_url == _config.base_url:
+		return
+	_log.debug("dropping the session held against the previous auth backend")
+	_forget()
 
 ## Returns an independent copy of the backend configuration in force.
 ##
