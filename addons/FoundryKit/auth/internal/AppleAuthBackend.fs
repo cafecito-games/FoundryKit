@@ -34,6 +34,15 @@ const _PAYLOAD_FIELDS: Array[String] = ["id_token", "email", "display_name",
 		"authorization_code"]
 const _STORAGE_DETAIL: String = "secure session storage is not implemented on this backend yet"
 
+## The failure codes the Google native emits, mirrored from `SignInOutcome.swift`.
+##
+## They are this native's protocol, not a shared vocabulary, so translating them is this
+## backend's job: [method AuthError.from_native] knows only that a native failed, and
+## would report an ordinary cancellation as a request failure.
+const _NATIVE_ERROR_CANCELLED: int = 0
+const _NATIVE_ERROR_NO_CREDENTIAL: int = 1
+const _NATIVE_ERROR_UNAVAILABLE: int = 2
+
 var _log: FoundryKitLog
 var _native: Object? = null
 var _request_count: int = 0
@@ -174,8 +183,8 @@ async func _await_native_sign_in(
 	match outcome:
 		NativeOutcome.Succeeded(payload):
 			return _credential_from(payload)
-		NativeOutcome.Failed(_code, _message):
-			return CredentialResult.Failure(AuthError.from_native(outcome, provider))
+		NativeOutcome.Failed(code, _message):
+			return CredentialResult.Failure(_error_from_failure(code, outcome, provider))
 		NativeOutcome.TimedOut(_elapsed_seconds):
 			return CredentialResult.Failure(AuthError.from_native(outcome, provider))
 		NativeOutcome.Abandoned:
@@ -183,6 +192,21 @@ async func _await_native_sign_in(
 		NativeOutcome.Unavailable(_missing_class):
 			return CredentialResult.Failure(AuthError.from_native(outcome, provider))
 	return _unavailable(provider)
+
+## Translates a native failure code into the auth vocabulary.
+##
+## The native reserves codes for outcomes that are not faults — the player closing the
+## sheet, and a silent sign-in finding no stored account — and for a provider it cannot
+## serve at all. Every other code, including the native's own generic one, keeps its code
+## and message through [method AuthError.from_native] rather than being reinterpreted.
+func _error_from_failure(code: int, outcome: NativeOutcome, provider: Provider) -> AuthError:
+	if code == _NATIVE_ERROR_CANCELLED:
+		return AuthError.Cancelled
+	if code == _NATIVE_ERROR_NO_CREDENTIAL:
+		return AuthError.NoCredential
+	if code == _NATIVE_ERROR_UNAVAILABLE:
+		return AuthError.Unavailable(provider)
+	return AuthError.from_native(outcome, provider)
 
 ## Builds the credential a successful emission describes.
 ##

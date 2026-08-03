@@ -142,11 +142,37 @@ func test_a_stale_token_emission_does_not_settle_the_current_request() -> void:
 	_native.emit_success(live_token, _TOKEN, "c@d.e", "Grace")
 	Expect.that(_describe(await second_pending)).to_equal("ok:google:user-123")
 
-func test_native_failure_maps_through_auth_error() -> void:
+func test_an_unrecognised_native_code_maps_through_auth_error() -> void:
 	_configure()
 	var pending: Coroutine[CredentialResult] = _backend.sign_in(Provider.GOOGLE)
-	_native.emit_failure(_native.last_request_token, 4, "boom")
+	_native.emit_failure(_native.last_request_token, 99, "boom")
 	Expect.that(_describe(await pending)).to_equal("fail:request_failed")
+
+func test_the_generic_native_code_maps_through_auth_error() -> void:
+	_configure()
+	var pending: Coroutine[CredentialResult] = _backend.sign_in(Provider.GOOGLE)
+	_native.emit_failure(_native.last_request_token, 3, "Sign-in failed.")
+	Expect.that(_describe(await pending)).to_equal("fail:request_failed")
+
+## The native's own vocabulary — cancellation, no stored credential, unavailable — must
+## survive the crossing instead of collapsing into a request failure.
+func test_the_native_cancellation_code_maps_to_cancelled() -> void:
+	_configure()
+	var pending: Coroutine[CredentialResult] = _backend.sign_in(Provider.GOOGLE)
+	_native.emit_failure(_native.last_request_token, 0, "The player cancelled the sign-in flow.")
+	Expect.that(_describe(await pending)).to_equal("fail:cancelled")
+
+func test_the_native_no_credential_code_maps_to_no_credential() -> void:
+	_configure()
+	var pending: Coroutine[CredentialResult] = _backend.sign_in_silent(Provider.GOOGLE)
+	_native.emit_failure(_native.last_request_token, 1, "Sign-in returned no credential.")
+	Expect.that(_describe(await pending)).to_equal("fail:no_credential")
+
+func test_the_native_unavailable_code_maps_to_unavailable() -> void:
+	_configure()
+	var pending: Coroutine[CredentialResult] = _backend.sign_in(Provider.GOOGLE)
+	_native.emit_failure(_native.last_request_token, 2, "Sign-in is unavailable.")
+	Expect.that(_describe(await pending)).to_equal("fail:unavailable")
 
 func test_a_success_without_an_id_token_reports_the_missing_field() -> void:
 	_configure()
