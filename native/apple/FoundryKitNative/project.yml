@@ -36,14 +36,19 @@ targets:
         # destination therefore needs two entries. Counting from a framework in
         # bin/<subsystem>/, which is where every FoundryKit binary lives:
         #
-        #   shape      to bin/                to addons/
-        #   shallow    @loader_path/../..     @loader_path/../../../..
+        #   shape      to bin/                     to addons/
+        #   shallow    @loader_path/../..          @loader_path/../../../..
         #   versioned  @loader_path/../../../../   @loader_path/../../../../../..
         #
-        # An entry that does not resolve is skipped by dyld, so the shape that does not
+        # A binary loaded straight out of an xcframework sits two levels deeper again
+        # (<Name>.xcframework/<slice>/), so each shape needs a second pair. The shallow
+        # in-xcframework depth coincides with the versioned flat depth, which is why the
+        # list is six entries and not eight.
+        #
+        # An entry that does not resolve is skipped by dyld, so a shape that does not
         # apply costs nothing. @executable_path/Frameworks covers the iOS case where the
         # frameworks are embedded in the host .app instead.
-        LD_RUNPATH_SEARCH_PATHS: "@executable_path/Frameworks @loader_path/../../core @loader_path/../../../../core @loader_path/../../../../FoundrySwift/bin/macos_arm64 @loader_path/../../../../../../FoundrySwift/bin/macos_arm64"
+        LD_RUNPATH_SEARCH_PATHS: "@executable_path/Frameworks @loader_path/../../core @loader_path/../../../../core @loader_path/../../../../../../core @loader_path/../../../../FoundrySwift/bin/macos_arm64 @loader_path/../../../../../../FoundrySwift/bin/macos_arm64 @loader_path/../../../../../../../../FoundrySwift/bin/macos_arm64"
         # Foundry-Swift-Binary 0.1.0-alpha.2 has two packaging defects that make these
         # flags mandatory; both are tracked upstream as FoundryKit#81.
         #
