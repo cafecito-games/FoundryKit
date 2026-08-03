@@ -457,6 +457,76 @@ func test_a_lapse_after_a_new_sign_in_is_announced_again() -> void:
 	await _subsystem.valid_access_token()
 	Expect.that(_session_expired_count).to_equal(2)
 
+# --- Session replacement mid-call ---------------------------------------------------------
+
+func test_a_sign_in_completing_after_a_sign_out_does_not_resurrect_the_session() -> void:
+	# The player is in front of the native sheet when the game signs them out. The session
+	# the sheet eventually produces must not put them back where they asked not to be.
+	_backend.credential_result = CredentialResult.Success(_google_credential())
+	_backend.suspends = true
+	_transport.enqueue(HttpOutcome.Answered(200, _issued_session_json()))
+	var pending: Coroutine[SessionResult] = _subsystem.sign_in(Provider.GOOGLE)
+	await _subsystem.sign_out(Provider.GOOGLE)
+	_backend.release()
+	Expect.that(_describe_session(await pending)).to_equal("fail:cancelled")
+	Expect.that(_subsystem.has_session()).to_be_false()
+
+func test_a_restore_completing_after_a_sign_out_does_not_resurrect_the_session() -> void:
+	_backend.restore_result = SessionResult.Success(_session("restored-token", _REFRESH_TOKEN))
+	_backend.suspends = true
+	var pending: Coroutine[SessionResult] = _subsystem.restore_session()
+	await _subsystem.sign_out(Provider.GOOGLE)
+	_backend.release()
+	Expect.that(_describe_session(await pending)).to_equal("fail:cancelled")
+	Expect.that(_subsystem.has_session()).to_be_false()
+
+func test_valid_access_token_is_abandoned_when_the_session_is_replaced_mid_refresh() -> void:
+	# The store answers a superseded round with whatever it holds now. Handing that token to
+	# a caller who asked before the switch would give one player another player's credential.
+	await _install_session(_EXPIRED_TOKEN, "refresh-a")
+	_transport.enqueue(HttpOutcome.Answered(200, _fresh_session_json()))
+	var pending: Coroutine[TokenResult] = _subsystem.valid_access_token()
+	await _install_session("access-b", "refresh-b")
+	Expect.that(_describe_token(await pending)).to_equal("fail:session_expired:0")
+	Expect.that(_subsystem.access_token()).to_equal("access-b")
+
+func test_refresh_session_is_abandoned_when_the_session_is_replaced_mid_refresh() -> void:
+	await _install_session(_EXPIRED_TOKEN, "refresh-a")
+	_transport.enqueue(HttpOutcome.Answered(200, _fresh_session_json()))
+	var pending: Coroutine[SessionResult] = _subsystem.refresh_session()
+	await _install_session("access-b", "refresh-b")
+	Expect.that(_describe_session(await pending)).to_equal("fail:session_expired:0")
+	Expect.that(_subsystem.access_token()).to_equal("access-b")
+
+# --- Configuration the exchange needs -----------------------------------------------------
+
+func test_the_configured_web_client_id_becomes_the_exchange_audience() -> void:
+	# The native Google backend cannot report the audience, so it leaves it empty and this
+	# layer fills it from configuration. A backend that validates it refuses the sign-in
+	# otherwise.
+	_subsystem.configure(ProviderConfig.Google("web-client-id", "ios-client-id", "desktop-id"))
+	_backend.credential_result = CredentialResult.Success(Credential.Google(
+			"google-id-token", "player@example.com", "Player One", ""))
+	_transport.enqueue(HttpOutcome.Answered(200, _issued_session_json()))
+	await _subsystem.sign_in(Provider.GOOGLE)
+	Expect.that(_audience_sent()).to_equal("web-client-id")
+
+func test_an_audience_the_credential_carries_wins_over_configuration() -> void:
+	_subsystem.configure(ProviderConfig.Google("web-client-id", "ios-client-id", "desktop-id"))
+	_backend.credential_result = CredentialResult.Success(_google_credential())
+	_transport.enqueue(HttpOutcome.Answered(200, _issued_session_json()))
+	await _subsystem.sign_in(Provider.GOOGLE)
+	Expect.that(_audience_sent()).to_equal("client-id")
+
+func test_configuring_another_provider_does_not_clear_the_google_audience() -> void:
+	_subsystem.configure(ProviderConfig.Google("web-client-id", "ios-client-id", "desktop-id"))
+	_subsystem.configure(ProviderConfig.Apple("service-id", "https://example.com/callback"))
+	_backend.credential_result = CredentialResult.Success(Credential.Google(
+			"google-id-token", "player@example.com", "Player One", ""))
+	_transport.enqueue(HttpOutcome.Answered(200, _issued_session_json()))
+	await _subsystem.sign_in(Provider.GOOGLE)
+	Expect.that(_audience_sent()).to_equal("web-client-id")
+
 # --- Storage delegation -----------------------------------------------------------------
 
 func test_restore_session_installs_what_the_backend_returned() -> void:
@@ -520,6 +590,20 @@ func _fresh_session_json() -> PackedByteArray:
 
 func _json(payload: Dictionary) -> PackedByteArray:
 	return JSON.stringify(payload).to_utf8_buffer()
+
+## Returns the audience the most recent request body carried, or an empty string.
+func _audience_sent() -> String:
+	var parser: JSON = JSON.new()
+	if parser.parse(_transport.last_body.get_string_from_utf8()) != OK:
+		return ""
+	if not (parser.data is Dictionary):
+		return ""
+	var payload: Dictionary = parser.data
+	var audience: Variant = payload.get("audience")
+	if not (audience is String):
+		return ""
+	var sent: String = audience
+	return sent
 
 func _carries_authorization(headers: PackedStringArray) -> bool:
 	for header: String in headers:
@@ -632,6 +716,19 @@ class FakeAuthBackend extends RefCounted uses AuthBackend:
 	var sign_out_count: int = 0
 	var clear_count: int = 0
 
+	## When true, sign-in and restore park until [method release] is called.
+	##
+	## Native sheets and secure storage take arbitrarily long in production; this is what
+	## lets a test land a sign-out in the middle of one.
+	var suspends: bool = false
+
+	signal _released()
+
+	## Resumes whatever is parked, one message-queue turn later so a caller that has not yet
+	## reached its own await cannot miss the emission.
+	func release() -> void:
+		_released.emit.call_deferred()
+
 	func configure(_config: ProviderConfig) -> void:
 		return
 
@@ -642,9 +739,13 @@ class FakeAuthBackend extends RefCounted uses AuthBackend:
 		return true
 
 	async func sign_in(_provider: Provider) -> CredentialResult:
+		if suspends:
+			await _released
 		return credential_result
 
 	async func sign_in_silent(_provider: Provider) -> CredentialResult:
+		if suspends:
+			await _released
 		return credential_result
 
 	async func sign_out(_provider: Provider) -> CompletionResult:
@@ -655,6 +756,8 @@ class FakeAuthBackend extends RefCounted uses AuthBackend:
 		return CompletionResult.Success
 
 	async func restore_session() -> SessionResult:
+		if suspends:
+			await _released
 		return restore_result
 
 	func has_stored_session() -> bool:

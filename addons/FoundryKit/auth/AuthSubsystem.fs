@@ -19,8 +19,15 @@ import games.cafecito.foundrykit.core
 ## [b]One retry, never a loop.[/b] A 401 on an authorized request buys exactly one refresh
 ## and exactly one replay. The retry is written as a single call on the success branch of
 ## the refresh rather than as a loop with a counter, so the bound is structural: there is
-## no counter to get wrong and no path back to the first attempt. The replay is bound to the
-## session the first attempt was authorized under — see [method _replaced_mid_request].
+## no counter to get wrong and no path back to the first attempt.
+##
+## [b]A call never answers for a session it did not begin under.[/b] Native sheets, secure
+## storage and the network all take arbitrarily long, and a player can sign in again or sign
+## out while any of them is outstanding. Every call that spans an await takes the session
+## generation first and checks it before handing anything back — see
+## [method _session_replaced_since]. Without that, a sign-in completing after a sign-out
+## reinstates the session the player just ended, and a request or a token call made for one
+## account returns, or executes under, whoever signed in since.
 ##
 ## [b]Announcements are per event, not per caller.[/b] [SessionStore] emits nothing and
 ## reports [method SessionStore.rotation_count] instead, because a refresh is single-flight:
@@ -81,6 +88,12 @@ var _lapse_announced: bool = true
 ## tell that the session it was authorized under is no longer the one held.
 var _session_generation: int = 0
 
+## The Google web client ID the exchange presents as the credential's audience.
+##
+## Learned from [method configure]; see [method _resolved_audience] for why the exchange,
+## not the native backend, is what supplies it.
+var _google_audience: String = ""
+
 ## Builds the subsystem.
 ##
 ## [param transport], [param config] and [param backend] default to the production objects
@@ -126,7 +139,9 @@ func _init(
 func request_guard() -> RequestGuard:
 	return _guard
 
+## Applies configuration for one provider, keeping whatever of it the exchange needs.
 func configure(config: ProviderConfig) -> void:
+	_google_audience = _audience_of(config, _google_audience)
 	_backend.configure(config)
 
 func is_available(provider: Provider) -> bool:
@@ -135,11 +150,19 @@ func is_available(provider: Provider) -> bool:
 func is_configured(provider: Provider) -> bool:
 	return _backend.is_configured(provider)
 
+## Runs an interactive sign-in and exchanges the credential it produces.
+##
+## The session generation is taken before the native flow starts, so a sign-out or a second
+## sign-in that lands while the player is still in front of the native sheet is not undone
+## by the session this flow eventually produces.
 async func sign_in(provider: Provider) -> SessionResult:
-	return await _exchange(await _backend.sign_in(provider))
+	var generation: int = _session_generation
+	return await _exchange(await _backend.sign_in(provider), generation)
 
+## Attempts sign-in without UI and exchanges the credential it produces.
 async func sign_in_silent(provider: Provider) -> SessionResult:
-	return await _exchange(await _backend.sign_in_silent(provider))
+	var generation: int = _session_generation
+	return await _exchange(await _backend.sign_in_silent(provider), generation)
 
 ## Signs out of the native provider and drops the session.
 ##
@@ -171,7 +194,10 @@ async func valid_access_token() -> TokenResult:
 	if not active.is_expired_at(_now_unix_seconds()):
 		return TokenResult.Success(active.access_token)
 
+	var generation: int = _session_generation
 	var refreshed: SessionResult = await _refresh_and_announce()
+	if _session_replaced_since(generation):
+		return TokenResult.Failure(AuthError.SessionExpired(0))
 	match refreshed:
 		SessionResult.Failure(error):
 			return TokenResult.Failure(error)
@@ -184,15 +210,26 @@ async func valid_access_token() -> TokenResult:
 async func refresh_session() -> SessionResult:
 	if not _is_backend_configured():
 		return SessionResult.Failure(AuthError.Configuration(_NO_BACKEND))
-	return await _refresh_and_announce()
+	var generation: int = _session_generation
+	var refreshed: SessionResult = await _refresh_and_announce()
+	if _session_replaced_since(generation):
+		return SessionResult.Failure(AuthError.SessionExpired(0))
+	return refreshed
 
 ## Restores a session from platform secure storage and makes it the active one.
+##
+## A restore that completes after an explicit sign-out is discarded rather than installed:
+## secure storage can take arbitrarily long, and reinstating a session the player has since
+## ended would sign them back in behind their back.
 async func restore_session() -> SessionResult:
+	var generation: int = _session_generation
 	var result: SessionResult = await _backend.restore_session()
 	match result:
 		SessionResult.Failure(_error):
 			return result
 		SessionResult.Success(session):
+			if _session_replaced_since(generation):
+				return _superseded()
 			_install(session)
 			return result
 	return result
@@ -215,7 +252,7 @@ async func request(method: HttpMethod, path: String, body: Variant) -> ResponseR
 	var first: ResponseResult = await _client.request(method, path, body, _store.access_token())
 	if not _is_refused(first):
 		return first
-	if generation != _session_generation:
+	if _session_replaced_since(generation):
 		return _replaced_mid_request()
 
 	_log.debug("the backend refused the presented token; refreshing once before retrying")
@@ -224,13 +261,60 @@ async func request(method: HttpMethod, path: String, body: Variant) -> ResponseR
 		SessionResult.Failure(error):
 			return ResponseResult.Failure(error)
 		SessionResult.Success(_session):
-			if generation != _session_generation:
+			if _session_replaced_since(generation):
 				return _replaced_mid_request()
 			var retried: ResponseResult = await _client.request(
 					method, path, body, _store.access_token())
 			return _result_of_retry(retried)
 	return ResponseResult.Failure(AuthError.InvalidResponse(
 			"the session store reported a result this subsystem does not understand"))
+
+## Returns the audience a Google exchange presents.
+##
+## [AppleAuthBackend] leaves the credential's audience empty on purpose — the native does
+## not return it — and names this the layer that supplies it. A backend that validates the
+## audience refuses an otherwise valid sign-in without one, so the configured web client ID
+## fills the gap. A credential that does carry an audience keeps it: the desktop OAuth flow
+## knows which client ID it authorized against, and that is more specific than configuration.
+func _resolved_audience(audience: String) -> String:
+	if audience.is_empty():
+		return _google_audience
+	return audience
+
+## Returns the audience to keep after applying [param config].
+##
+## Only the Google case carries one. Every other configuration leaves the current value
+## alone rather than clearing it, so configuring Apple afterwards does not silently
+## unconfigure Google.
+##
+## Exhaustive over [ProviderConfig]; the trailing return exists only because the analyser
+## cannot see that the match is total.
+func _audience_of(config: ProviderConfig, current: String) -> String:
+	match config:
+		ProviderConfig.Google(web_client_id, _ios_client_id, _desktop_client_id):
+			return web_client_id
+		ProviderConfig.Apple(_service_id, _redirect_uri):
+			return current
+		ProviderConfig.EmailPassword:
+			return current
+	return current
+
+## Returns whether the held session was replaced or dropped since [param generation].
+##
+## Every call that spans an await takes the generation first and checks it before handing
+## anything back, so a call made for one player can never return the session, the token or
+## the reply belonging to whoever signed in while it was suspended.
+func _session_replaced_since(generation: int) -> bool:
+	return generation != _session_generation
+
+## Returns what a flow resolves to when an explicit session change superseded it.
+##
+## [code]Cancelled[/code] rather than an error naming the backend: nothing failed. The
+## player, or the game on their behalf, asked for something else while this was in flight,
+## and the result is being dropped on purpose.
+func _superseded() -> SessionResult:
+	_log.debug("discarding a session an explicit sign-in or sign-out has superseded")
+	return SessionResult.Failure(AuthError.Cancelled)
 
 ## Reports a request whose session was replaced while it was still in flight.
 ##
@@ -259,12 +343,12 @@ func _result_of_retry(retried: ResponseResult) -> ResponseResult:
 ##
 ## Exhaustive over [CredentialResult]; the trailing return exists only because the analyser
 ## cannot see that the match is total.
-async func _exchange(credential_result: CredentialResult) -> SessionResult:
+async func _exchange(credential_result: CredentialResult, generation: int) -> SessionResult:
 	match credential_result:
 		CredentialResult.Failure(error):
 			return SessionResult.Failure(error)
 		CredentialResult.Success(credential):
-			return await _exchange_credential(credential)
+			return await _exchange_credential(credential, generation)
 	return SessionResult.Failure(AuthError.InvalidResponse(
 			"the backend reported a credential result this subsystem does not understand"))
 
@@ -272,7 +356,7 @@ async func _exchange(credential_result: CredentialResult) -> SessionResult:
 ##
 ## The request carries no bearer credential: there is no session yet, and the credential
 ## being exchanged travels in the body.
-async func _exchange_credential(credential: Credential) -> SessionResult:
+async func _exchange_credential(credential: Credential, generation: int) -> SessionResult:
 	var provider: Provider = Credential.provider_of(credential)
 	_log.debug("exchanging a credential for provider %d" % provider)
 	var response: ResponseResult = await _client.request(
@@ -282,6 +366,8 @@ async func _exchange_credential(credential: Credential) -> SessionResult:
 		SessionResult.Failure(_error):
 			return result
 		SessionResult.Success(session):
+			if _session_replaced_since(generation):
+				return _superseded()
 			_install(session)
 			return result
 	return result
@@ -303,7 +389,7 @@ func _exchange_body(credential: Credential) -> Dictionary[String, Variant]:
 				"id_token": id_token,
 				"email": email,
 				"display_name": display_name,
-				"audience": audience,
+				"audience": _resolved_audience(audience),
 			}
 			return google_body
 		Credential.Apple(identity_token, authorization_code, email, full_name):
