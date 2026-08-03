@@ -161,7 +161,7 @@ async func refresh() -> SessionResult:
 		var renews_my_session: bool = _refresh_generation == _session_generation
 		var joined: SessionResult = await _refresh_settled
 		if renews_my_session:
-			return joined
+			return _copied(joined)
 
 	var current: AuthSession? = _session
 	if current == null:
@@ -178,6 +178,21 @@ async func refresh() -> SessionResult:
 	_run_refresh(_refresh_round, active, _session_generation)
 
 	var result: SessionResult = await _refresh_settled
+	return _copied(result)
+
+## Returns [param result] with its session copied.
+##
+## One round settles with one payload, which the signal hands to every caller that joined
+## it. Without a copy per caller they would all share one mutable [AuthSession]: the first
+## to change a token on the session it was returned would change what the others are still
+## about to read. This is the single exit every refreshed session leaves through, so the
+## store's own instance never escapes either.
+func _copied(result: SessionResult) -> SessionResult:
+	match result:
+		SessionResult.Failure(_error):
+			return result
+		SessionResult.Success(session):
+			return SessionResult.Success(session.duplicate_session())
 	return result
 
 ## Performs the one backend call a round makes.
@@ -259,7 +274,7 @@ func _install(
 			_session = refreshed
 			if _rotated(session, refreshed):
 				_rotation_count += 1
-			return SessionResult.Success(refreshed.duplicate_session())
+			return result
 	return result
 
 ## Returns what a caller sees when its round was superseded by an explicit session change.
@@ -287,12 +302,15 @@ func _rotated(previous: AuthSession, refreshed: AuthSession) -> bool:
 
 ## Reports the session the store holds right now, for a caller whose own round was
 ## superseded.
+##
+## Carries the store's own instance; [method _copied] copies it once per caller on the way
+## out, so it never leaves this class uncopied.
 func _current_result() -> SessionResult:
 	var current: AuthSession? = _session
 	if current == null:
 		return SessionResult.Failure(AuthError.SessionExpired(0))
 	var active: AuthSession = current
-	return SessionResult.Success(active.duplicate_session())
+	return SessionResult.Success(active)
 
 ## Maps a backend reply onto a session result.
 ##

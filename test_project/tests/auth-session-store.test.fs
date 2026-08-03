@@ -80,6 +80,21 @@ func test_a_refreshed_session_is_handed_out_as_a_copy() -> void:
 			Expect.that("failure").to_equal("success")
 	Expect.that(_store.access_token()).to_equal("fresh-access-token")
 
+func test_each_caller_of_one_round_gets_its_own_session() -> void:
+	# One round settles with one payload. Handing that same mutable session to every caller
+	# would let the first to change a token on it change what the others are about to read.
+	_store.set_session(_session(_EXPIRED_TOKEN, _REFRESH_TOKEN))
+	_transport.enqueue(HttpOutcome.Answered(200, _fresh_session_json()))
+	var first: Coroutine[SessionResult] = _store.refresh()
+	var second: Coroutine[SessionResult] = _store.refresh()
+	match await first:
+		SessionResult.Success(session):
+			session.access_token = "tampered"
+		SessionResult.Failure(_error):
+			Expect.that("failure").to_equal("success")
+	Expect.that(_describe(await second)).to_equal("ok:fresh-access-token")
+	Expect.that(_store.access_token()).to_equal("fresh-access-token")
+
 func test_a_store_without_a_session_hands_out_null() -> void:
 	Expect.that(_store.session() == null).to_be_true()
 
