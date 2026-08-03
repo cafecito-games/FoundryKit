@@ -65,15 +65,19 @@ resolution_glob="${resolution_glob%.framework\'}"
 # exactly what the build script would find.
 name_pattern="${resolution_glob//\*/[A-Za-z0-9]+}"
 
+# Every extension that depends on FoundryKitCore also depends on the wrapper, because
+# FoundryKitCore links the wrapper rather than FoundrySwift.framework directly. Selecting
+# on FoundryKitCore rather than on the wrapper itself is what makes an extension that
+# omits the wrapper entirely a failure instead of a file this check quietly skips.
 extensions=()
 while IFS= read -r extension; do
     [ -n "$extension" ] || continue
-    grep -q '_PackageProduct' "$extension" || continue
+    grep -qE 'FoundryKitCore\.(xc)?framework' "$extension" || continue
     extensions+=("$extension")
 done < <(find "$addon" -maxdepth 1 -name '*.foundryextension' | sort)
 
 if [ "${#extensions[@]}" -eq 0 ]; then
-    echo "FAIL: no .foundryextension in ${addon#"$repo_root"/} names a FoundrySwift package product" >&2
+    echo "FAIL: no .foundryextension in ${addon#"$repo_root"/} depends on FoundryKitCore" >&2
     exit 1
 fi
 
@@ -92,8 +96,12 @@ for extension in "${extensions[@]}"; do
         sed -e 's/\.xcframework$//' -e 's/\.framework$//' | sort -u)
 
     if [ "${#names[@]}" -ne 1 ]; then
-        fail "$relative names ${#names[@]} distinct package-product bundles, expected exactly one:" \
-            "${names[*]:-(none)}"
+        if [ "${#names[@]}" -eq 0 ]; then
+            found="(none)"
+        else
+            found="${names[*]}"
+        fi
+        fail "$relative names ${#names[@]} distinct package-product bundles, expected exactly one: $found"
         continue
     fi
 
