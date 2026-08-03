@@ -100,6 +100,11 @@ class _PendingRequest extends RefCounted:
 		var node: HTTPRequest = HTTPRequest.new()
 		_request_node = node
 		_pending.append(self)
+		# The node polls the connection from _process, so an inherited process mode would
+		# stall it the moment the tree pauses — while the watchdog below keeps running,
+		# turning a perfectly reachable host into a timeout. A network call is not game
+		# simulation; it runs regardless of pause, exactly as its watchdog does.
+		node.process_mode = Node.PROCESS_MODE_ALWAYS
 		tree.root.add_child(node)
 		node.timeout = timeout_seconds
 		# Never follow redirects. [HTTPRequest] otherwise follows up to eight of them and

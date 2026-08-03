@@ -130,6 +130,19 @@ func test_real_client_settles_when_the_connection_is_refused() -> void:
 	var outcome: HttpOutcome = await pending
 	Expect.that(_is_answered(outcome)).to_be_false()
 
+func test_real_client_progresses_while_the_tree_is_paused() -> void:
+	var tree: SceneTree = Engine.get_main_loop() as SceneTree
+	if tree == null:
+		return
+	# The request node polls its connection from _process. Under an inherited process mode
+	# a paused tree stalls it while the watchdog keeps counting, so a reachable host would
+	# be reported as a timeout. Settling promptly here is what proves that is not so.
+	tree.paused = true
+	var outcome: HttpOutcome = await HttpClient.new(FoundryKitLog.new("test")).send(
+			"GET", "http://127.0.0.1:1/", PackedStringArray(), PackedByteArray(), 5.0)
+	tree.paused = false
+	Expect.that(_describe(outcome)).to_equal("transport:could not connect to the host")
+
 func test_real_client_settles_twice_in_a_row_on_one_instance() -> void:
 	if not _has_scene_tree():
 		return
