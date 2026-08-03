@@ -80,15 +80,26 @@ fi
 for extension in "${extensions[@]}"; do
     relative="${extension#"$repo_root"/}"
 
+    # Whole basenames, not substrings: a path naming
+    # FoundrySwift_<hash>_PackageProduct_STALE.xcframework contains the correct name but
+    # points at a bundle the build never publishes, and would load no better than a
+    # stale hash.
     names=()
-    while IFS= read -r name; do
-        [ -n "$name" ] || continue
-        names+=("$name")
-    done < <(grep -oE "$name_pattern" "$extension" | sort -u)
+    while IFS= read -r base; do
+        [ -n "$base" ] || continue
+        names+=("$base")
+    done < <(grep -oE '[^"/]*_PackageProduct[^"/]*\.(xc)?framework' "$extension" |
+        sed -e 's/\.xcframework$//' -e 's/\.framework$//' | sort -u)
 
     if [ "${#names[@]}" -ne 1 ]; then
-        fail "$relative names ${#names[@]} wrappers matching '$resolution_glob', expected exactly one:" \
+        fail "$relative names ${#names[@]} distinct package-product bundles, expected exactly one:" \
             "${names[*]:-(none)}"
+        continue
+    fi
+
+    if ! [[ ${names[0]} =~ ^${name_pattern}$ ]]; then
+        fail "$relative names '${names[0]}', which scripts/build-apple-auth would never resolve;" \
+            "it publishes '$resolution_glob'"
         continue
     fi
 
@@ -110,7 +121,7 @@ for extension in "${extensions[@]}"; do
             block="$block$line"
             if [ "$line" = "}" ]; then
                 case "$block" in
-                    *"$name"*) ;;
+                    *"/$name.framework\""* | *"/$name.xcframework\""*) ;;
                     *) fail "$relative declares dependencies for '$platform' without naming $name" ;;
                 esac
                 platform=""
