@@ -13,6 +13,9 @@ env:
   # The engine the suite is verified against. Local development may use a build from
   # source; this pin is what CI guarantees. Bumping it is a deliberate, reviewable change.
   FOUNDRY_VERSION: v0.1.0-alpha.19
+  # The Apple toolchain the native suite is verified against, matching local development.
+  # Bumping it is a deliberate, reviewable change.
+  XCODE_VERSION: '26.4.1'
 
 jobs:
   foundrylib:
@@ -98,3 +101,47 @@ jobs:
 
       - name: Run script checks
         run: task test:scripts
+
+  apple:
+    name: Apple native
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          developer_directory="/Applications/Xcode_${XCODE_VERSION}.app/Contents/Developer"
+          if [ ! -d "$developer_directory" ]; then
+            echo "Xcode $XCODE_VERSION is not installed on this runner image." >&2
+            ls -d /Applications/Xcode*.app >&2
+            exit 1
+          fi
+          sudo xcode-select --switch "$developer_directory"
+          xcodebuild -version
+          swift --version
+
+      - name: Install Task and XcodeGen
+        run: brew install go-task xcodegen
+
+      # Derived data carries the resolved SwiftPM checkouts and the unpacked
+      # Foundry-Swift-Binary artifacts, so it is keyed on the pins and on the project
+      # definition that produces the Xcode project those checkouts are resolved for.
+      - name: Cache derived data and SwiftPM checkouts
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/xcodebuild/SourcePackages
+            ~/Library/Caches/org.swift.swiftpm
+          key: apple-spm-${{ env.XCODE_VERSION }}-${{ hashFiles('native/apple/FoundryKitNative/Package.resolved', 'native/apple/FoundryKitNative/project.yml') }}
+          restore-keys: |
+            apple-spm-${{ env.XCODE_VERSION }}-
+
+      # No credentials: Foundry-Swift-Binary and GoogleSignIn-iOS are both public and
+      # their release assets download anonymously, verified against SHA-256 checksums.
+      - name: Run the Apple native suite
+        run: task apple:test
+
+      - name: Build the auth xcframework
+        run: task apple:auth
