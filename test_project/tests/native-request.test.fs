@@ -9,6 +9,7 @@ extends RefCounted
 uses Test
 
 const _FIELDS: Array[String] = ["id_token", "email"]
+const _CORRELATED_FIELDS: Array[String] = ["id_token", "email"]
 
 var _log: FoundryKitLog
 var _native: FakeNative
@@ -115,3 +116,39 @@ func test_fewer_signal_arguments_than_fields_leaves_missing_keys_absent() -> voi
 	# Only two arguments were emitted, so "display_name" must be absent rather than null.
 	Expect.that(_payload_size(outcome)).to_equal(2)
 	Expect.that(_describe(outcome)).to_equal("ok:token:user@example.com")
+
+func _start_correlated(token: String, timeout_seconds: float) -> Coroutine[NativeOutcome]:
+	var request: NativeRequest = NativeRequest.new(_log)
+	return request.await_outcome(
+			_native, "correlated_success", _CORRELATED_FIELDS, "correlated_failed",
+			timeout_seconds, token)
+
+func test_matching_token_settles_and_token_is_not_in_payload() -> void:
+	var pending: Coroutine[NativeOutcome] = _start_correlated("tok-a", 5.0)
+	_native.emit_correlated_success("tok-a", "token-value", "user@example.com")
+	var outcome: NativeOutcome = await pending
+	Expect.that(_describe(outcome)).to_equal("ok:token-value:user@example.com")
+	Expect.that(_payload_size(outcome)).to_equal(2)
+
+func test_mismatched_token_does_not_settle_then_matching_one_does() -> void:
+	var pending: Coroutine[NativeOutcome] = _start_correlated("tok-b", 5.0)
+	# A late reply from a previous request must be ignored entirely.
+	_native.emit_correlated_success("tok-stale", "wrong", "wrong@example.com")
+	_native.emit_correlated_success("tok-b", "right", "right@example.com")
+	var outcome: NativeOutcome = await pending
+	Expect.that(_describe(outcome)).to_equal("ok:right:right@example.com")
+
+func test_mismatched_failure_token_is_ignored() -> void:
+	var pending: Coroutine[NativeOutcome] = _start_correlated("tok-c", 5.0)
+	_native.emit_correlated_failure("tok-stale", 4, "not mine")
+	_native.emit_correlated_failure("tok-c", 7, "mine")
+	var outcome: NativeOutcome = await pending
+	Expect.that(_describe(outcome)).to_equal("fail:7:mine")
+
+func test_empty_token_accepts_any_emission() -> void:
+	var request: NativeRequest = NativeRequest.new(_log)
+	var pending: Coroutine[NativeOutcome] = request.await_outcome(
+			_native, "operation_success", _FIELDS, "operation_failed", 5.0, "")
+	_native.emit_success("token-value", "user@example.com")
+	var outcome: NativeOutcome = await pending
+	Expect.that(_describe(outcome)).to_equal("ok:token-value:user@example.com")
