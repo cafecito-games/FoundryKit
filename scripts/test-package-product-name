@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+# Guards the FoundrySwift package-product wrapper name against silent drift.
+#
+# Xcode wraps the FoundrySwift package product in a generated framework whose name carries
+# a hash of the product's identity: FoundrySwift_<hash>_PackageProduct.framework. That hash
+# changes when the Foundry-Swift-Binary pin moves or the upstream product is restructured.
+#
+# scripts/build-apple-auth resolves the name at build time, so a build survives the change.
+# A .foundryextension has no such expansion — it names the wrapper literally, once per
+# platform, under [dependencies]. Nothing couples the two, so a pin bump can produce a
+# fully green build that ships an extension naming a wrapper that no longer exists. The
+# extension then fails to load and the backend degrades to Unavailable, which by design is
+# indistinguishable from an unsupported platform.
+#
+# This check closes that loop from both ends:
+#
+#   Statically, with no Xcode and no build products — which is what CI's ubuntu Scripts
+#   job has — it asserts that every extension names exactly one wrapper, names it in every
+#   platform block it declares a dependency for, and that the name matches the glob
+#   scripts/build-apple-auth resolves with. Changing the build script's resolution pattern
+#   without updating the extensions turns this red.
+#
+#   At build time, scripts/build-apple-auth re-runs this script as
+#   `test-package-product-name --expect <resolved name>` after resolving the wrapper from
+#   the build products. A pin bump that changes the hash fails the build there, instead of
+#   producing an artefact that is broken only at runtime.
+#
+# Both ends read the name from the same place, so the extension file stays the single
+# source of truth; there is no second copy of the hash to drift.
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+addon="$repo_root/addons/FoundryKit"
+build_script="$repo_root/scripts/build-apple-auth"
+
+expected=""
+if [ "$#" -gt 0 ]; then
+    if [ "$1" = "--expect" ] && [ "$#" -eq 2 ]; then
+        expected="$2"
+    else
+        echo "usage: test-package-product-name [--expect <wrapper name>]" >&2
+        exit 2
+    fi
+fi
+
+status=0
+
+# A .foundryextension comments with ";". Everything below reads configuration only, so a
+# commented-out dependency reads as absent — which is what the engine sees.
+uncommented() {
+    sed 's/;.*//' "$1"
+}
+
+fail() {
+    echo "FAIL: $*" >&2
+    status=1
+}
+
+# The pattern the build script resolves the wrapper with, read out of the build script
+# itself so the two cannot describe different things.
+resolution_glob=$(grep -oE "\-name '[^']*_PackageProduct\.framework'" "$build_script" | head -n1)
+if [ -z "$resolution_glob" ]; then
+    echo "FAIL: no package-product resolution pattern in ${build_script#"$repo_root"/}" >&2
+    echo "Expected a find(1) -name argument matching *_PackageProduct.framework." >&2
+    exit 1
+fi
+resolution_glob="${resolution_glob#-name \'}"
+resolution_glob="${resolution_glob%.framework\'}"
+
+# The same pattern as an extended regular expression, so the extension is searched for
+# exactly what the build script would find.
+name_pattern="${resolution_glob//\*/[A-Za-z0-9]+}"
+
+# Every extension that depends on FoundryKitCore also depends on the wrapper, because
+# FoundryKitCore links the wrapper rather than FoundrySwift.framework directly. Selecting
+# on FoundryKitCore rather than on the wrapper itself is what makes an extension that
+# omits the wrapper entirely a failure instead of a file this check quietly skips.
+extensions=()
+while IFS= read -r extension; do
+    [ -n "$extension" ] || continue
+    uncommented "$extension" | grep -qE 'FoundryKitCore\.(xc)?framework' || continue
+    extensions+=("$extension")
+done < <(find "$addon" -maxdepth 1 -name '*.foundryextension' | sort)
+
+if [ "${#extensions[@]}" -eq 0 ]; then
+    echo "FAIL: no .foundryextension in ${addon#"$repo_root"/} depends on FoundryKitCore" >&2
+    exit 1
+fi
+
+for extension in "${extensions[@]}"; do
+    relative="${extension#"$repo_root"/}"
+
+    # Whole basenames, not substrings: a path naming
+    # FoundrySwift_<hash>_PackageProduct_STALE.xcframework contains the correct name but
+    # points at a bundle the build never publishes, and would load no better than a
+    # stale hash.
+    names=()
+    while IFS= read -r base; do
+        [ -n "$base" ] || continue
+        names+=("$base")
+    done < <(uncommented "$extension" |
+        grep -oE '[^"/]*_PackageProduct[^"/]*\.(xc)?framework' |
+        sed -e 's/\.xcframework$//' -e 's/\.framework$//' | sort -u)
+
+    if [ "${#names[@]}" -ne 1 ]; then
+        if [ "${#names[@]}" -eq 0 ]; then
+            found="(none)"
+        else
+            found="${names[*]}"
+        fi
+        fail "$relative names ${#names[@]} distinct package-product bundles, expected exactly one: $found"
+        continue
+    fi
+
+    if ! [[ ${names[0]} =~ ^${name_pattern}$ ]]; then
+        fail "$relative names '${names[0]}', which scripts/build-apple-auth would never resolve;" \
+            "it publishes '$resolution_glob'"
+        continue
+    fi
+
+    name="${names[0]}"
+
+    if [ -n "$expected" ] && [ "$name" != "$expected" ]; then
+        fail "$relative names '$name' but the build resolved '$expected'; update the [dependencies] blocks in $relative"
+    fi
+
+    # Every platform that declares dependencies at all must declare the wrapper: an
+    # extension that loads FoundryKitCore without it fails in dyld, not at parse time.
+    # A dictionary value may be written on one line or spread over several, so a block
+    # runs from the "=" that opens it to the first "}", however many lines that spans.
+    platform=""
+    block=""
+    blocks=0
+    while IFS= read -r line || [ -n "$line" ]; do
+        if [ -z "$platform" ]; then
+            case "$line" in
+                '['*']'*) continue ;;
+                *'='*'{'*)
+                    platform="${line%%=*}"
+                    platform="${platform#"${platform%%[![:space:]]*}"}"
+                    platform="${platform%"${platform##*[![:space:]]}"}"
+                    block=""
+                    ;;
+                *) continue ;;
+            esac
+        fi
+        block="$block$line"
+        case "$line" in
+            *'}'*)
+                blocks=$((blocks + 1))
+                case "$block" in
+                    *"/$name.framework\""* | *"/$name.xcframework\""*) ;;
+                    *) fail "$relative declares dependencies for '$platform' without naming $name" ;;
+                esac
+                platform=""
+                ;;
+        esac
+    done < <(uncommented "$extension" | sed -n '/^\[dependencies\]/,/^\[/p')
+
+    if [ -n "$platform" ]; then
+        fail "$relative has an unterminated dependency block for '$platform'"
+    fi
+
+    if [ "$blocks" -eq 0 ]; then
+        fail "$relative names $name but declares no platform dependency blocks"
+    fi
+
+    if [ "$status" -eq 0 ]; then
+        echo "  $relative -> $name"
+    fi
+done
+
+if [ "$status" -eq 0 ]; then
+    if [ -n "$expected" ]; then
+        echo "PASS: every extension names the package-product wrapper the build resolved ($expected)"
+    else
+        echo "PASS: every extension names one package-product wrapper, in every platform block"
+    fi
+fi
+
+exit "$status"
