@@ -9,10 +9,16 @@
 #
 # The assets live on public releases of cafecito-games/Foundry-Swift, so this downloads
 # them anonymously over HTTPS. No token and no authenticated `gh` are required.
+#
+# Usage: prepare-foundryswift-binary [checkout-directory]
+#
+# With no argument it targets the SwiftPM command-line checkout under the package's
+# .build/. `scripts/build-apple-auth` passes the xcodebuild SourcePackages checkout
+# instead, because xcodebuild clones the package again under its derived-data path.
 set -euo pipefail
 
 package_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-checkout="$package_dir/.build/checkouts/Foundry-Swift-Binary"
+checkout=${1:-"$package_dir/.build/checkouts/Foundry-Swift-Binary"}
 
 for command_name in curl unzip shasum python3; do
 	command -v "$command_name" >/dev/null 2>&1 || {
@@ -21,12 +27,17 @@ for command_name in curl unzip shasum python3; do
 	}
 done
 
-if [[ ! -d "$checkout" ]]; then
+if [[ $# -eq 0 && ! -d "$checkout" ]]; then
 	echo "Resolving Swift packages to create the Foundry-Swift-Binary checkout..."
 	# Resolution reports the missing binary artifacts as an error but still writes the
 	# checkout, which is all this step needs.
 	(cd "$package_dir" && swift package resolve) || true
 fi
+
+[[ -d "$checkout" ]] || {
+	echo "prepare-foundryswift-binary: no Foundry-Swift-Binary checkout at $checkout" >&2
+	exit 1
+}
 
 manifest="$checkout/binaries.json"
 [[ -f "$manifest" ]] || {

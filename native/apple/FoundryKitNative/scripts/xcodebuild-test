@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Runs the FoundryKitNative Swift suite through xcodebuild.
+#
+# Plain `swift test` cannot build these targets: Foundry-Swift-Binary 0.1.0-alpha.2 types
+# its macro bundle as an executable rather than a macro plugin, and its xcframework ships
+# only a .swiftinterface, so both the macro plugin and the FoundryExtensionC import search
+# paths have to be supplied explicitly. Those flags live in `project.yml`, which makes
+# xcodebuild the only entry point that can build the package. Tracked upstream as #81.
+#
+# Extra arguments are forwarded to xcodebuild.
+set -euo pipefail
+
+package_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+derived_data=$(cd "$package_dir/../../.." && pwd)/.build/xcodebuild
+
+source "$package_dir/scripts/apple-build-support"
+
+apple_require_tools
+apple_generate_project "$package_dir"
+apple_prepare_packages "$package_dir" "$derived_data" FoundryKitAuth_macOS
+
+exec xcodebuild test \
+	-project "$package_dir/FoundryKitNative.xcodeproj" \
+	-scheme FoundryKitAuth_macOS \
+	-destination "platform=macOS,arch=arm64" \
+	-derivedDataPath "$derived_data" \
+	-skipPackagePluginValidation \
+	-skipMacroValidation \
+	"$@"

@@ -26,3 +26,13 @@ tasks:
     desc: Generate .uid files for addon scripts missing one
     cmds:
       - scripts/generate-uids
+
+  apple:auth:
+    desc: Build the Apple auth xcframework and the shared core framework
+    cmds:
+      - scripts/build-apple-auth
+
+  apple:test:
+    desc: Run the Apple native Swift suite through xcodebuild
+    cmds:
+      - native/apple/FoundryKitNative/scripts/xcodebuild-test
