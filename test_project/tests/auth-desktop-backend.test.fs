@@ -525,6 +525,86 @@ func test_reconfiguring_mid_flight_does_not_change_the_attempt_in_progress() -> 
 	Expect.that(_sent_parameter("client_id")).to_equal(_DESKTOP_CLIENT_ID)
 	Expect.that(_google_fields(result).ends_with("|" + _DESKTOP_CLIENT_ID)).to_be_true()
 
+## The whole desktop flow in one pass, through every seam it is made of: the configuration
+## is read, a real [LoopbackServer] binds a real ephemeral port on 127.0.0.1, the URL handed
+## to the browser names that port and carries the PKCE challenge and `state` this attempt
+## generated, a callback echoing that `state` arrives over a real TCP socket, the code and
+## the matching verifier are posted to the token endpoint exactly once, and the ID token
+## comes back as a [code]Credential.Google[/code] whose audience is the desktop client ID.
+##
+## The tests above prove each of those parts in isolation. This one exists because parts
+## that each work can still be wired together wrongly — a challenge derived from a verifier
+## the exchange does not send, a redirect URI built from a port nothing is listening on, a
+## `state` compared against a value regenerated after the URL was built. None of those show
+## up in a part test; all of them show up here.
+##
+## [b]What this does not verify.[/b] Being green here does not mean desktop sign-in works
+## against Google. Three things in the flow are not exercised at all:
+##
+## - [b]No real Google endpoint.[/b] Both the authorization request and the token exchange
+##   stop at doubles. Whether Google accepts this client ID, these scopes, this redirect
+##   URI, or this PKCE material — and what its real responses look like — is untested. The
+##   token body here is a fixture written by this suite, not one Google produced.
+## - [b]No real browser.[/b] [FakeBrowser] records a URL; nothing opens, nothing navigates,
+##   nothing renders the page the listener writes back. That [code]OS.shell_open[/code]
+##   launches anything on Linux or Windows is unverified, as is what a real browser does to
+##   the loopback port before it follows the redirect (#125).
+## - [b]No real user consent.[/b] No account signs in, no consent screen is shown, no
+##   authorization code is ever issued by an authorization server. The code delivered below
+##   is a string this test made up.
+##
+## In short: the composition of FoundryKit's own parts is proven; the protocol's agreement
+## with Google is not. First verification against the real endpoint, a real browser and a
+## real account belongs to epic G, and until that lands "the desktop flow is tested" means
+## only what this list leaves standing.
+func test_the_desktop_flow_runs_end_to_end_over_a_real_loopback_socket() -> void:
+	_configure()
+	_transport.enqueue(HttpOutcome.Answered(200, _token_body(_ID_TOKEN)))
+
+	var pending: Coroutine[CredentialResult] = _backend.sign_in(Provider.GOOGLE)
+
+	# The listener is up on a real ephemeral loopback port, and the browser was sent a URL
+	# naming that exact port — not one re-derived after the fact.
+	var listener: LoopbackServer = _last_listener()
+	var bound_port: int = listener.port()
+	var redirect_uri: String = listener.redirect_uri()
+	Expect.that(bound_port > 0).to_be_true()
+	Expect.that(redirect_uri).to_equal("http://127.0.0.1:%d/" % bound_port)
+	Expect.that(_browser.open_count).to_equal(1)
+
+	var authorization_query: String = _query_of(_browser.last_url)
+	var challenge: String = _parameter_of(authorization_query, "code_challenge")
+	var state: String = _parameter_of(authorization_query, "state")
+	Expect.that(_browser.last_url.begins_with(DesktopAuthBackend.AUTHORIZATION_ENDPOINT)) \
+			.to_be_true()
+	Expect.that(_parameter_of(authorization_query, "client_id")).to_equal(_DESKTOP_CLIENT_ID)
+	Expect.that(_parameter_of(authorization_query, "redirect_uri")).to_equal(redirect_uri)
+	Expect.that(_parameter_of(authorization_query, "response_type")).to_equal("code")
+	Expect.that(_parameter_of(authorization_query, "code_challenge_method")).to_equal("S256")
+	Expect.that(challenge.is_empty()).to_be_false()
+	Expect.that(state.is_empty()).to_be_false()
+
+	# A genuine TCP connection to that port, carrying a callback that echoes the `state` the
+	# browser was given. Nothing between the socket and the backend is faked.
+	await _deliver("code=end-to-end-code&state=" + state.uri_encode())
+	var result: CredentialResult = await pending
+
+	# Exactly one exchange, carrying the code that arrived and the verifier the challenge in
+	# the authorization URL was derived from.
+	Expect.that(_transport.send_count).to_equal(1)
+	Expect.that(_transport.last_method).to_equal("POST")
+	Expect.that(_transport.last_url).to_equal(DesktopAuthBackend.TOKEN_ENDPOINT)
+	Expect.that(_sent_parameter("code")).to_equal("end-to-end-code")
+	Expect.that(_sent_parameter("redirect_uri")).to_equal(redirect_uri)
+	Expect.that(PkcePair.challenge_for(_sent_parameter("code_verifier"))).to_equal(challenge)
+
+	Expect.that(_google_fields(result)).to_equal(
+			"%s|ada@example.com|Ada Lovelace|%s" % [_ID_TOKEN, _DESKTOP_CLIENT_ID])
+
+	# The listener settled once and released its port, so the attempt leaves nothing behind.
+	Expect.that(listener.settle_count()).to_equal(1)
+	Expect.that(listener.port()).to_equal(0)
+
 func test_sign_out_succeeds_because_there_is_nothing_native_to_sign_out_of() -> void:
 	_configure()
 	Expect.that(_describe_completion(await _backend.sign_out(Provider.GOOGLE))).to_equal("ok")
