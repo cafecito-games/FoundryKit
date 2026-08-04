@@ -15,8 +15,9 @@ import games.cafecito.foundrykit.core
 ## while one is in flight and answers it with its own failure — under the refused request's
 ## token, which keeps every emission attributable to the request that caused it.
 ##
-## Google only in this epic. Sign in with Apple and Keychain-backed session storage belong
-## to later epics; both report unavailable here rather than pretending to work.
+## Google only for provider sign-in. Session persistence is delegated to [SecureStore],
+## which uses the Keychain on Apple platforms and reports unavailable when its binary is
+## absent.
 class_name AppleAuthBackend extends RefCounted
 uses AuthBackend
 
@@ -32,7 +33,11 @@ const _FAILURE_SIGNAL: String = "sign_in_failed"
 ## native actually emits.
 const _PAYLOAD_FIELDS: Array[String] = ["id_token", "email", "display_name",
 		"authorization_code"]
-const _STORAGE_DETAIL: String = "secure session storage is not implemented on this backend yet"
+const _STORAGE_UNAVAILABLE_DETAIL: String = "secure session storage is unavailable on this platform"
+const _STORAGE_ABSENT_DETAIL: String = "no stored session is available"
+const _STORAGE_ORIGIN_DETAIL: String = "the stored session belongs to a different backend origin"
+const _STORAGE_MALFORMED_DETAIL: String = "the stored session record is malformed"
+const _STORAGE_VERSION_DETAIL: String = "the stored session record uses an unsupported schema version"
 
 ## The failure codes the Google native emits, mirrored from `SignInOutcome.swift`.
 ##
@@ -45,13 +50,22 @@ const _NATIVE_ERROR_UNAVAILABLE: int = 2
 
 var _log: FoundryKitLog
 var _native: Object? = null
+var _secure_store: SecureStore
 var _request_count: int = 0
+var _has_stored_session: bool = false
 
-## [param native_override] lets tests inject a fake native. Production passes null, so the
-## backend probes [ClassDB] itself through [NativeBridge] and resolves to an unavailable
-## backend when the binary is absent.
-func _init(log: FoundryKitLog, native_override: Object? = null) -> void:
+## [param native_override] and [param secure_store_override] let tests inject the two
+## platform seams. Production passes null for both, so each probes [ClassDB] through its
+## own bridge and resolves to unavailable when the binary is absent.
+func _init(
+		log: FoundryKitLog,
+		native_override: Object? = null,
+		secure_store_override: SecureStore? = null) -> void:
 	_log = log
+	if secure_store_override != null:
+		_secure_store = secure_store_override
+	else:
+		_secure_store = AppleSecureStore.new(log)
 	if native_override != null:
 		_native = native_override
 		return
@@ -123,17 +137,79 @@ async func sign_out(provider: Provider) -> CompletionResult:
 	target.call("signOut", _new_correlation_token())
 	return CompletionResult.Success
 
-async func store_session(_session: AuthSession) -> CompletionResult:
-	return CompletionResult.Failure(AuthError.Storage(_STORAGE_DETAIL))
+async func store_session(session: AuthSession, origin: String) -> CompletionResult:
+	if not _secure_store.is_available():
+		return CompletionResult.Failure(AuthError.Storage(_STORAGE_UNAVAILABLE_DETAIL))
+	var record: StoredSession = StoredSession.from_session(session, origin)
+	var result: CompletionResult = await _secure_store.store(record.to_bytes())
+	match result:
+		CompletionResult.Success:
+			_has_stored_session = true
+		CompletionResult.Failure(_error):
+			pass
+	return result
 
-async func restore_session() -> SessionResult:
-	return SessionResult.Failure(AuthError.Storage(_STORAGE_DETAIL))
+async func restore_session(origin: String) -> SessionResult:
+	if not _secure_store.is_available():
+		return SessionResult.Failure(AuthError.Storage(_STORAGE_UNAVAILABLE_DETAIL))
+	var loaded: SecureLoadOutcome = await _secure_store.load()
+	match loaded:
+		SecureLoadOutcome.Loaded(bytes):
+			return await _restore_loaded(bytes, origin)
+		SecureLoadOutcome.Absent:
+			_has_stored_session = false
+			return SessionResult.Failure(AuthError.Storage(_STORAGE_ABSENT_DETAIL))
+		SecureLoadOutcome.Failed(detail):
+			return SessionResult.Failure(AuthError.Storage(detail))
+	return SessionResult.Failure(AuthError.Storage(_STORAGE_ABSENT_DETAIL))
 
 func has_stored_session() -> bool:
-	return false
+	if not _secure_store.is_available():
+		return false
+	return _has_stored_session
 
 async func clear_stored_session() -> CompletionResult:
-	return CompletionResult.Success
+	if not _secure_store.is_available():
+		# There cannot be a record to erase when this process has no secure-storage stack.
+		# Clearing still reaches the state the caller asked for, matching NullAuthBackend.
+		_has_stored_session = false
+		return CompletionResult.Success
+	var result: CompletionResult = await _secure_store.erase()
+	match result:
+		CompletionResult.Success:
+			_has_stored_session = false
+		CompletionResult.Failure(_error):
+			pass
+	return result
+
+## Parses one loaded record, checks its persisted origin before materialising a session,
+## and erases every record this build cannot safely restore.
+async func _restore_loaded(bytes: PackedByteArray, origin: String) -> SessionResult:
+	var parsed: StoredSessionOutcome = StoredSession.from_bytes(bytes)
+	match parsed:
+		StoredSessionOutcome.Parsed(record):
+			if record.origin != origin:
+				return await _erase_rejected_record(_STORAGE_ORIGIN_DETAIL)
+			_has_stored_session = true
+			return SessionResult.Success(record.to_session())
+		StoredSessionOutcome.Malformed(_detail):
+			return await _erase_rejected_record(_STORAGE_MALFORMED_DETAIL)
+		StoredSessionOutcome.VersionUnsupported(_version):
+			return await _erase_rejected_record(_STORAGE_VERSION_DETAIL)
+	return SessionResult.Failure(AuthError.Storage(_STORAGE_MALFORMED_DETAIL))
+
+## Attempts the erase exactly once and reports the original rejection as a storage error.
+## The returned detail never includes record bytes or token values.
+async func _erase_rejected_record(detail: String) -> SessionResult:
+	var erased: CompletionResult = await _secure_store.erase()
+	_has_stored_session = false
+	match erased:
+		CompletionResult.Success:
+			return SessionResult.Failure(AuthError.Storage(detail))
+		CompletionResult.Failure(_error):
+			return SessionResult.Failure(AuthError.Storage(
+					"%s; the rejected record could not be erased" % detail))
+	return SessionResult.Failure(AuthError.Storage(detail))
 
 ## Returns the native object able to serve [param provider], or null when none can.
 ##
