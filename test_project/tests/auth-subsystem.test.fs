@@ -30,6 +30,10 @@ const _ORIGIN_A_ACCESS_TOKEN: String = "origin-a-access-token"
 
 const _ORIGIN_A_REFRESH_TOKEN: String = "origin-a-refresh-token"
 
+const _STORAGE_ERROR_ACCESS_SENTINEL: String = "storage-error-access-token-sentinel"
+
+const _STORAGE_ERROR_REFRESH_SENTINEL: String = "storage-error-refresh-token-sentinel"
+
 var _auth: AuthSubsystem
 
 var _log: FoundryKitLog
@@ -159,7 +163,11 @@ func test_a_successful_exchange_stores_the_session_against_the_configured_origin
 
 func test_a_store_failure_leaves_the_successful_sign_in_installed_and_logs_no_tokens() -> void:
 	_backend.credential_result = CredentialResult.Success(_google_credential())
-	_backend.next_store_result = CompletionResult.Failure(AuthError.Storage("write failed"))
+	_backend.next_store_result = CompletionResult.Failure(AuthError.Storage(
+			"write rejected access=%s refresh=%s" % [
+				_STORAGE_ERROR_ACCESS_SENTINEL,
+				_STORAGE_ERROR_REFRESH_SENTINEL,
+			]))
 	_transport.enqueue(HttpOutcome.Answered(200, _issued_session_json()))
 	var result: SessionResult = await _subsystem.sign_in(Provider.GOOGLE)
 	Expect.that(_describe_session(result)).to_equal("ok:issued-access-token")
@@ -171,6 +179,8 @@ func test_a_store_failure_leaves_the_successful_sign_in_installed_and_logs_no_to
 		Expect.that(line.contains("persist")).to_be_true()
 		Expect.that(line.contains("issued-access-token")).to_be_false()
 		Expect.that(line.contains("issued-refresh-token")).to_be_false()
+		Expect.that(line.contains(_STORAGE_ERROR_ACCESS_SENTINEL)).to_be_false()
+		Expect.that(line.contains(_STORAGE_ERROR_REFRESH_SENTINEL)).to_be_false()
 
 func test_the_exchange_posts_the_credential_to_the_configured_path() -> void:
 	_backend.credential_result = CredentialResult.Success(_google_credential())
@@ -311,6 +321,16 @@ func test_a_failed_refresh_does_not_store_the_session() -> void:
 	await _subsystem.refresh_session()
 	Expect.that(_backend.store_count).to_equal(0)
 
+func test_a_successful_refresh_that_rotates_nothing_does_not_store_the_session() -> void:
+	await _install_session(_EXPIRED_TOKEN, _REFRESH_TOKEN)
+	_transport.enqueue(HttpOutcome.Answered(200, _json({
+		"access_token": _EXPIRED_TOKEN,
+		"refresh_token": _REFRESH_TOKEN,
+	})))
+	var result: SessionResult = await _subsystem.refresh_session()
+	Expect.that(_describe_session(result)).to_equal("ok:" + _EXPIRED_TOKEN)
+	Expect.that(_backend.store_count).to_equal(0)
+
 func test_refresh_session_without_a_session_reports_the_session_expired() -> void:
 	var result: SessionResult = await _subsystem.refresh_session()
 	Expect.that(_describe_session(result)).to_equal("fail:session_expired:0")
@@ -403,9 +423,9 @@ func test_a_rotation_announces_the_refreshed_tokens_once() -> void:
 	Expect.that(_last_refreshed_token).to_equal("fresh-access-token")
 
 func test_concurrent_callers_announce_one_rotation_between_them() -> void:
-	# One round, one rotation, one announcement. A subsystem that announces per caller
-	# instead of per rotation emits three times here — and the store, which counts rotations
-	# rather than emitting, cannot tell it apart on its own.
+	# One round, one rotation, one announcement and one durable write. A subsystem that acts
+	# per caller instead of per rotation emits or stores three times here — and the store,
+	# which counts rotations rather than emitting, cannot tell it apart on its own.
 	await _install_session(_EXPIRED_TOKEN, _REFRESH_TOKEN)
 	_transport.enqueue(HttpOutcome.Answered(200, _fresh_session_json()))
 	var first: Coroutine[TokenResult] = _subsystem.valid_access_token()
@@ -416,6 +436,7 @@ func test_concurrent_callers_announce_one_rotation_between_them() -> void:
 	Expect.that(_describe_token(await third)).to_equal("ok:fresh-access-token")
 	Expect.that(_transport.send_count).to_equal(1)
 	Expect.that(_tokens_refreshed_count).to_equal(1)
+	Expect.that(_backend.store_count).to_equal(1)
 
 func test_two_rotations_are_announced_twice() -> void:
 	await _install_session(_EXPIRED_TOKEN, _REFRESH_TOKEN)
