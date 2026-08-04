@@ -85,6 +85,14 @@ var _store: SessionStore
 ## [signal AuthApi.tokens_refreshed]. Rotations past this one have not been announced.
 var _announced_rotation_count: int = 0
 
+## The value of [method SessionStore.rotation_count] whose durable write this subsystem has
+## already attempted.
+##
+## Claimed before awaiting the backend so concurrent callers joined to one refresh round do
+## not write the same rotated session more than once. A failed write is still an attempt:
+## persistence failure does not make the active session or the refresh fail.
+var _persisted_rotation_count: int = 0
+
 ## Whether the loss of the current session has already been announced.
 ##
 ## Starts true because a subsystem holding no session has nothing to lose. Cleared whenever
@@ -536,6 +544,7 @@ async func _exchange_credential(
 			if _session_replaced_since(generation):
 				return _superseded()
 			_install(session)
+			await _persist_session(session)
 			return result
 	return result
 
@@ -645,9 +654,42 @@ func _session_from_body(response: AuthResponse, provider: Provider) -> SessionRe
 ## lapse can be announced from and one place that decides whether it already has been.
 async func _refresh_and_announce() -> SessionResult:
 	var result: SessionResult = await _store.refresh()
+	await _persist_rotation()
 	_announce_rotation()
 	_announce_lapse_if_lost(result)
 	return result
+
+## Writes a rotated session once, and only when either token actually changed.
+##
+## [SessionStore] is single-flight, so every caller joined to a round sees the same result.
+## The rotation count turns that fan-out back into one durable write, just as
+## [member _announced_rotation_count] turns it into one announcement.
+async func _persist_rotation() -> void:
+	var rotations: int = _store.rotation_count()
+	if rotations == _persisted_rotation_count:
+		return
+	_persisted_rotation_count = rotations
+	var current: AuthSession? = _store.session()
+	if current == null:
+		return
+	var rotated: AuthSession = current
+	await _persist_session(rotated)
+
+## Attempts to persist [param session] against the backend origin that issued it.
+##
+## Persistence is deliberately best-effort. Once exchange or refresh has installed a
+## session, a storage failure means only that the player must sign in again next launch;
+## turning it into an authentication failure would report an installed, usable session as
+## absent. The log names the failed operation but never includes the error detail or session
+## fields, either of which may contain credential material from a backend implementation.
+async func _persist_session(session: AuthSession) -> void:
+	var stored: CompletionResult = await _backend.store_session(
+			session, _origin_of(_config.base_url))
+	match stored:
+		CompletionResult.Success:
+			return
+		CompletionResult.Failure(_error):
+			_log.warn("could not persist the active session; it remains active for this process")
 
 ## Announces a rotation the store recorded and this subsystem has not reported yet.
 ##
