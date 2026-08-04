@@ -52,7 +52,6 @@ var _log: FoundryKitLog
 var _native: Object? = null
 var _secure_store: SecureStore
 var _request_count: int = 0
-var _has_stored_session: bool = false
 
 ## [param native_override] and [param secure_store_override] let tests inject the two
 ## platform seams. Production passes null for both, so each probes [ClassDB] through its
@@ -141,13 +140,7 @@ async func store_session(session: AuthSession, origin: String) -> CompletionResu
 	if not _secure_store.is_available():
 		return CompletionResult.Failure(AuthError.Storage(_STORAGE_UNAVAILABLE_DETAIL))
 	var record: StoredSession = StoredSession.from_session(session, origin)
-	var result: CompletionResult = await _secure_store.store(record.to_bytes())
-	match result:
-		CompletionResult.Success:
-			_has_stored_session = true
-		CompletionResult.Failure(_error):
-			pass
-	return result
+	return await _secure_store.store(record.to_bytes())
 
 async func restore_session(origin: String) -> SessionResult:
 	if not _secure_store.is_available():
@@ -157,30 +150,20 @@ async func restore_session(origin: String) -> SessionResult:
 		SecureLoadOutcome.Loaded(bytes):
 			return await _restore_loaded(bytes, origin)
 		SecureLoadOutcome.Absent:
-			_has_stored_session = false
 			return SessionResult.Failure(AuthError.Storage(_STORAGE_ABSENT_DETAIL))
 		SecureLoadOutcome.Failed(detail):
 			return SessionResult.Failure(AuthError.Storage(detail))
 	return SessionResult.Failure(AuthError.Storage(_STORAGE_ABSENT_DETAIL))
 
 func has_stored_session() -> bool:
-	if not _secure_store.is_available():
-		return false
-	return _has_stored_session
+	return _secure_store.has_value()
 
 async func clear_stored_session() -> CompletionResult:
 	if not _secure_store.is_available():
 		# There cannot be a record to erase when this process has no secure-storage stack.
 		# Clearing still reaches the state the caller asked for, matching NullAuthBackend.
-		_has_stored_session = false
 		return CompletionResult.Success
-	var result: CompletionResult = await _secure_store.erase()
-	match result:
-		CompletionResult.Success:
-			_has_stored_session = false
-		CompletionResult.Failure(_error):
-			pass
-	return result
+	return await _secure_store.erase()
 
 ## Parses one loaded record, checks its persisted origin before materialising a session,
 ## and erases every record this build cannot safely restore.
@@ -190,7 +173,6 @@ async func _restore_loaded(bytes: PackedByteArray, origin: String) -> SessionRes
 		StoredSessionOutcome.Parsed(record):
 			if record.origin != origin:
 				return await _erase_rejected_record(_STORAGE_ORIGIN_DETAIL)
-			_has_stored_session = true
 			return SessionResult.Success(record.to_session())
 		StoredSessionOutcome.Malformed(_detail):
 			return await _erase_rejected_record(_STORAGE_MALFORMED_DETAIL)
@@ -202,7 +184,6 @@ async func _restore_loaded(bytes: PackedByteArray, origin: String) -> SessionRes
 ## The returned detail never includes record bytes or token values.
 async func _erase_rejected_record(detail: String) -> SessionResult:
 	var erased: CompletionResult = await _secure_store.erase()
-	_has_stored_session = false
 	match erased:
 		CompletionResult.Success:
 			return SessionResult.Failure(AuthError.Storage(detail))

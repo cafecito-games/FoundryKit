@@ -53,6 +53,7 @@ func _load_outcome_name(outcome: SecureLoadOutcome) -> String:
 
 func test_is_never_available() -> void:
 	Expect.that(_store.is_available()).to_be_false()
+	Expect.that(_store.has_value()).to_be_false()
 
 func test_store_fails_with_storage_error() -> void:
 	var result: CompletionResult = await _store.store(PackedByteArray([1, 2, 3]))

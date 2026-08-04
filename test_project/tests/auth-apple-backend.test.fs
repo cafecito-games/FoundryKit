@@ -261,10 +261,25 @@ func test_restore_session_refuses_and_erases_a_foreign_origin() -> void:
 	var foreign: StoredSession = StoredSession.from_session(
 			AuthSession.new("foreign-access", "foreign-refresh"),
 			"https://api-a.example.com")
+	_secure_store.stored_value_present = true
 	_secure_store.next_load_outcome = SecureLoadOutcome.Loaded(foreign.to_bytes())
 	var result: SessionResult = await _backend.restore_session("https://api-b.example.com")
 	Expect.that(_describe_session(result)).to_equal("fail:storage")
 	Expect.that(_secure_store.erase_count).to_equal(1)
+	Expect.that(_backend.has_stored_session()).to_be_false()
+
+func test_a_failed_foreign_record_erase_leaves_durable_presence_true() -> void:
+	var foreign: StoredSession = StoredSession.from_session(
+			AuthSession.new("foreign-access", "foreign-refresh"),
+			"https://api-a.example.com")
+	_secure_store.stored_value_present = true
+	_secure_store.next_load_outcome = SecureLoadOutcome.Loaded(foreign.to_bytes())
+	_secure_store.next_erase_result = CompletionResult.Failure(
+			AuthError.Storage("Keychain erase failed"))
+	var result: SessionResult = await _backend.restore_session("https://api-b.example.com")
+	Expect.that(_describe_session(result)).to_equal("fail:storage")
+	Expect.that(_secure_store.erase_count).to_equal(1)
+	Expect.that(_backend.has_stored_session()).to_be_true()
 
 func test_restore_session_with_a_matching_origin_preserves_every_field() -> void:
 	var original: AuthSession = _session_with_every_field()
@@ -302,6 +317,19 @@ func test_restore_session_reports_a_store_load_failure_without_erasing() -> void
 	Expect.that(_describe_session(
 			await _backend.restore_session("https://api.example.com"))).to_equal("fail:storage")
 	Expect.that(_secure_store.erase_count).to_equal(0)
+
+func test_restore_session_reports_absent_and_has_stored_session_is_false() -> void:
+	_secure_store.next_load_outcome = SecureLoadOutcome.Absent
+	Expect.that(_describe_session(
+			await _backend.restore_session("https://api.example.com"))).to_equal("fail:storage")
+	Expect.that(_secure_store.erase_count).to_equal(0)
+	Expect.that(_backend.has_stored_session()).to_be_false()
+
+func test_a_fresh_backend_reports_a_preexisting_durable_session() -> void:
+	_secure_store.stored_value_present = true
+	var fresh: AppleAuthBackend = AppleAuthBackend.new(
+			FoundryKitLog.new("test"), _native, _secure_store)
+	Expect.that(fresh.has_stored_session()).to_be_true()
 
 func test_has_stored_session_reflects_successful_store_and_clear_operations() -> void:
 	await _backend.store_session(
