@@ -7,6 +7,7 @@ import FoundrySwift
 #initFoundryExtension(
     cdecl: "foundry_kit_auth_entry_point",
     types: [
-        iOSGoogleSignIn.self
+        iOSGoogleSignIn.self,
+        iOSKeychain.self,
     ]
 )
