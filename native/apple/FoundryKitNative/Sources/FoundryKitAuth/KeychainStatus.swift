@@ -148,11 +148,21 @@ func keychainService(bundleIdentifier: String?, executableName: String?) -> Stri
 ///
 /// `kSecClassGenericPassword` items are keyed on service and account together, which is
 /// what makes a second `SecItemAdd` with the same pair report `errSecDuplicateItem`.
+///
+/// `kSecUseDataProtectionKeychain` is not optional here. On macOS a `SecItem` call
+/// without it targets the legacy file-based keychain, which does not honour
+/// `kSecAttrAccessible` — the item would be stored, the call would succeed, and the
+/// device-only, after-first-unlock guarantee this design rests on would silently not
+/// apply. It travels on the identity so every query built from it carries the selector:
+/// selecting the keychain on the write but not the read would look for the item in a
+/// different keychain than the one it was written to. On iOS the data-protection
+/// keychain is the only one there is and the key is a no-op.
 func keychainIdentity(service: String, account: String) -> [String: Any] {
     [
         kSecClass as String: kSecClassGenericPassword,
         kSecAttrService as String: service,
         kSecAttrAccount as String: account,
+        kSecUseDataProtectionKeychain as String: true,
     ]
 }
 

@@ -122,6 +122,20 @@ final class KeychainStatusTests: XCTestCase {
         XCTAssertNil(identity[kSecValueData as String])
     }
 
+    func testEveryQuerySelectsTheDataProtectionKeychain() {
+        // Without this, a macOS SecItem call targets the legacy file-based keychain,
+        // which ignores kSecAttrAccessible: the store would succeed and the device-only,
+        // after-first-unlock guarantee would silently not apply. It must be on the read
+        // and the delete too — selecting the keychain only on the write would leave
+        // later calls looking in a different keychain than the one holding the item.
+        let key = kSecUseDataProtectionKeychain as String
+        XCTAssertEqual(keychainIdentity(service: "svc", account: "session")[key] as? Bool, true)
+        XCTAssertEqual(keychainLoadQuery(service: "svc", account: "session")[key] as? Bool, true)
+        XCTAssertEqual(
+            keychainAddAttributes(service: "svc", account: "session", data: Data())[key] as? Bool,
+            true)
+    }
+
     func testLoadQueryAsksForTheDataAndASingleMatch() {
         let query = keychainLoadQuery(service: "svc", account: "session")
         XCTAssertEqual(query[kSecReturnData as String] as? Bool, true)
