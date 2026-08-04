@@ -196,6 +196,33 @@ func test_bytes_that_are_not_valid_utf8_are_malformed() -> void:
 	var bytes: PackedByteArray = PackedByteArray([0xFF, 0xFE, 0xFD])
 	Expect.that(_outcome_name(StoredSession.from_bytes(bytes))).to_equal("malformed")
 
+## Every field is written by `to_bytes`, so a schema-1 record missing one did not come
+## from this build. Defaulting it away would return a session that has quietly lost its
+## refresh token or the backend's own payload.
+func test_a_record_missing_any_field_is_malformed() -> void:
+	for key: String in ["origin", "access_token", "refresh_token", "provider", "raw", "extras"]:
+		var payload: Dictionary = {
+			"schema_version": StoredSession.SCHEMA_VERSION,
+			"origin": _ORIGIN,
+			"access_token": "a",
+			"refresh_token": "r",
+			"provider": "google",
+			"raw": {},
+			"extras": {},
+		}
+		payload.erase(key)
+		var bytes: PackedByteArray = JSON.stringify(payload).to_utf8_buffer()
+		Expect.that(_outcome_name(StoredSession.from_bytes(bytes))).to_equal("malformed")
+
+## An empty refresh token is what a backend that issues none produces, and it must still
+## restore — emptiness is only fatal for the fields that carry no meaning when empty.
+func test_an_empty_refresh_token_still_parses() -> void:
+	var raw: Dictionary[String, Variant] = {}
+	var extras: Dictionary[String, Variant] = {}
+	var record: StoredSession = StoredSession.new(_ORIGIN, "a", "", Provider.GOOGLE, raw, extras)
+	var parsed: StoredSession = _parsed(StoredSession.from_bytes(record.to_bytes()))
+	Expect.that(parsed.refresh_token).to_equal("")
+
 ## A field of the wrong type is a defective record. Defaulting it away would return a
 ## session that has quietly lost its refresh token or the backend's own payload.
 func test_a_field_of_the_wrong_type_is_malformed() -> void:

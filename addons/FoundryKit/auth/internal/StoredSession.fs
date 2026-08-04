@@ -84,6 +84,12 @@ func to_session() -> AuthSession:
 	return AuthSession.new(access_token, refresh_token, provider, raw, extras)
 
 ## Serializes the record for secure storage.
+##
+## [b]Numbers in [member raw] and [member extras] are JSON numbers[/b], so an integer
+## beyond 2^53 does not survive the round trip exactly. That is the format the values
+## arrived in — the backend's payload is read out of a JSON response by the same parser —
+## so nothing is lost here that was not already lost upstream. A backend that needs an
+## exact large integer preserved has to send it as a string, as JSON callers generally do.
 func to_bytes() -> PackedByteArray:
 	var payload: Dictionary = {
 		"schema_version": schema_version,
@@ -128,16 +134,18 @@ static func from_bytes(bytes: PackedByteArray) -> StoredSessionOutcome:
 	if version != SCHEMA_VERSION:
 		return StoredSessionOutcome.VersionUnsupported(version)
 
-	# A field of the wrong type is a defective record, not a field to be defaulted away.
-	# Silently substituting an empty refresh token or an empty `raw` would hand back a
-	# session that has quietly lost the ability to refresh, or lost backend data a consumer
-	# reads.
+	# Every field is required, at the right type. [method to_bytes] writes all seven, so a
+	# schema-1 record missing one was not written by this build, and defaulting it away
+	# would hand back a session that has quietly lost the ability to refresh or lost the
+	# backend payload a consumer reads. An empty value is a different matter — an empty
+	# refresh token is what a backend that issues none produces — so emptiness is judged
+	# per field below, not here.
 	for text_key: String in ["origin", "access_token", "refresh_token", "provider"]:
-		if _is_present_with_another_type(payload, text_key, TYPE_STRING):
-			return StoredSessionOutcome.Malformed("the record's %s is not a string" % text_key)
+		if not _carries(payload, text_key, TYPE_STRING):
+			return StoredSessionOutcome.Malformed("the record's %s is missing or not a string" % text_key)
 	for dictionary_key: String in ["raw", "extras"]:
-		if _is_present_with_another_type(payload, dictionary_key, TYPE_DICTIONARY):
-			return StoredSessionOutcome.Malformed("the record's %s is not an object" % dictionary_key)
+		if not _carries(payload, dictionary_key, TYPE_DICTIONARY):
+			return StoredSessionOutcome.Malformed("the record's %s is missing or not an object" % dictionary_key)
 
 	var stored_origin: String = _text_of(payload, "origin")
 	if stored_origin.is_empty():
@@ -184,14 +192,11 @@ static func _name_of(value: Provider) -> String:
 			return "email_password"
 	return ""
 
-## Returns whether [param key] is present carrying something other than [param expected_type].
-##
-## Absent is not "another type" — an absent optional field has a defined meaning here,
-## while a field of the wrong type has none.
-static func _is_present_with_another_type(payload: Dictionary, key: String, expected_type: int) -> bool:
+## Returns whether [param key] is present and of [param expected_type].
+static func _carries(payload: Dictionary, key: String, expected_type: int) -> bool:
 	if not payload.has(key):
 		return false
-	return typeof(payload[key]) != expected_type
+	return typeof(payload[key]) == expected_type
 
 ## The string at [param key], or the empty string when it is absent or not a string.
 ##
