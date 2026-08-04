@@ -315,6 +315,55 @@ func test_a_refresh_that_rotates_tokens_re_stores_the_session() -> void:
 	Expect.that(_backend.last_stored_session.access_token).to_equal("fresh-access-token")
 	Expect.that(_backend.last_stored_session.refresh_token).to_equal("fresh-refresh-token")
 
+func test_two_sequential_token_rotations_produce_exactly_two_durable_writes() -> void:
+	await _rotate_once()
+	_transport.enqueue(HttpOutcome.Answered(200, _json({
+		"access_token": "second-access-token",
+		"refresh_token": "second-refresh-token",
+	})))
+	await _subsystem.refresh_session()
+	Expect.that(_backend.store_count).to_equal(2)
+	Expect.that(_backend.last_stored_session.access_token).to_equal("second-access-token")
+	Expect.that(_backend.last_stored_session.refresh_token).to_equal("second-refresh-token")
+
+func test_install_after_a_rotation_does_not_make_an_unchanged_refresh_store_again() -> void:
+	await _rotate_once()
+	_backend.credential_result = CredentialResult.Success(_google_credential())
+	_transport.enqueue(HttpOutcome.Answered(200, _issued_session_json()))
+	await _subsystem.sign_in(Provider.GOOGLE)
+	_transport.enqueue(HttpOutcome.Answered(200, _issued_session_json()))
+	await _subsystem.refresh_session()
+	Expect.that(_backend.store_count).to_equal(2)
+
+func test_restore_after_a_rotation_does_not_make_a_failed_refresh_store_again() -> void:
+	await _rotate_once()
+	_backend.restore_result = SessionResult.Success(_session("restored-token", "restored-refresh"))
+	await _subsystem.restore_session()
+	_transport.enqueue(HttpOutcome.TimedOut(9.5))
+	await _subsystem.refresh_session()
+	Expect.that(_backend.store_count).to_equal(1)
+
+func test_clear_after_a_rotation_does_not_make_an_unchanged_refresh_store_again() -> void:
+	await _rotate_once()
+	await _subsystem.clear_session()
+	_backend.restore_result = SessionResult.Success(_session("restored-token", "restored-refresh"))
+	await _subsystem.restore_session()
+	_transport.enqueue(HttpOutcome.Answered(200, _json({
+		"access_token": "restored-token",
+		"refresh_token": "restored-refresh",
+	})))
+	await _subsystem.refresh_session()
+	Expect.that(_backend.store_count).to_equal(1)
+
+func test_reconfiguration_after_a_rotation_does_not_make_a_failed_refresh_store_again() -> void:
+	await _rotate_once()
+	_subsystem.configure_backend(BackendConfig.new("https://other.example.com"))
+	_backend.restore_result = SessionResult.Success(_session("restored-token", "restored-refresh"))
+	await _subsystem.restore_session()
+	_transport.enqueue(HttpOutcome.TimedOut(9.5))
+	await _subsystem.refresh_session()
+	Expect.that(_backend.store_count).to_equal(1)
+
 func test_a_failed_refresh_does_not_store_the_session() -> void:
 	await _install_session(_EXPIRED_TOKEN, _REFRESH_TOKEN)
 	_transport.enqueue(HttpOutcome.TimedOut(9.5))
@@ -975,6 +1024,12 @@ func test_the_request_guard_is_reachable() -> void:
 async func _install_session(access_token: String, refresh_token: String) -> void:
 	_backend.restore_result = SessionResult.Success(_session(access_token, refresh_token))
 	await _subsystem.restore_session()
+
+## Establishes one persisted rotation while leaving the refreshed session active.
+async func _rotate_once() -> void:
+	await _install_session("access-one", _REFRESH_TOKEN)
+	_transport.enqueue(HttpOutcome.Answered(200, _fresh_session_json()))
+	await _subsystem.refresh_session()
 
 func _session(access_token: String, refresh_token: String) -> AuthSession:
 	var raw: Dictionary[String, Variant] = {}
