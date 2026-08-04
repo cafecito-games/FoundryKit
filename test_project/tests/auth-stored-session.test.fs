@@ -183,6 +183,44 @@ func test_json_that_is_not_an_object_is_malformed() -> void:
 	var bytes: PackedByteArray = "[1, 2, 3]".to_utf8_buffer()
 	Expect.that(_outcome_name(StoredSession.from_bytes(bytes))).to_equal("malformed")
 
+## UTF-8 decoding stops at a NUL, so a valid record followed by one and arbitrary rubbish
+## would decode to just the valid prefix. Bytes that are not wholly the record are not the
+## record.
+func test_bytes_with_a_trailing_nul_and_rubbish_are_malformed() -> void:
+	var bytes: PackedByteArray = _record().to_bytes()
+	bytes.append(0)
+	bytes.append_array("{not json".to_utf8_buffer())
+	Expect.that(_outcome_name(StoredSession.from_bytes(bytes))).to_equal("malformed")
+
+func test_bytes_that_are_not_valid_utf8_are_malformed() -> void:
+	var bytes: PackedByteArray = PackedByteArray([0xFF, 0xFE, 0xFD])
+	Expect.that(_outcome_name(StoredSession.from_bytes(bytes))).to_equal("malformed")
+
+## A field of the wrong type is a defective record. Defaulting it away would return a
+## session that has quietly lost its refresh token or the backend's own payload.
+func test_a_field_of_the_wrong_type_is_malformed() -> void:
+	var wrong_typed_values: Dictionary = {
+		"origin": 7,
+		"access_token": 7,
+		"refresh_token": 7,
+		"provider": 7,
+		"raw": "not an object",
+		"extras": "not an object",
+	}
+	for key: String in wrong_typed_values.keys():
+		var payload: Dictionary = {
+			"schema_version": StoredSession.SCHEMA_VERSION,
+			"origin": _ORIGIN,
+			"access_token": "a",
+			"refresh_token": "r",
+			"provider": "google",
+			"raw": {},
+			"extras": {},
+		}
+		payload[key] = wrong_typed_values[key]
+		var bytes: PackedByteArray = JSON.stringify(payload).to_utf8_buffer()
+		Expect.that(_outcome_name(StoredSession.from_bytes(bytes))).to_equal("malformed")
+
 func test_a_record_with_an_unrecognised_provider_is_malformed() -> void:
 	var payload: Dictionary = {
 		"schema_version": StoredSession.SCHEMA_VERSION,

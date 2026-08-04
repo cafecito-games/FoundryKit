@@ -104,7 +104,12 @@ static func from_bytes(bytes: PackedByteArray) -> StoredSessionOutcome:
 	if bytes.is_empty():
 		return StoredSessionOutcome.Malformed("the record is empty")
 	var text: String = bytes.get_string_from_utf8()
-	if text.is_empty():
+	if text.is_empty() or text.to_utf8_buffer() != bytes:
+		# Decoding is lossy on anything that is not well-formed UTF-8, and it stops dead at
+		# an embedded NUL — so a valid record followed by a NUL and arbitrary rubbish would
+		# otherwise decode to just the valid part and parse. Re-encoding and comparing is
+		# what makes "these exact bytes are the record" true rather than "these bytes begin
+		# with something that looks like one".
 		return StoredSessionOutcome.Malformed("the record is not valid UTF-8 text")
 	var parser: JSON = JSON.new()
 	if parser.parse(text) != OK:
@@ -122,6 +127,17 @@ static func from_bytes(bytes: PackedByteArray) -> StoredSessionOutcome:
 		return StoredSessionOutcome.Malformed("the record carries no schema_version")
 	if version != SCHEMA_VERSION:
 		return StoredSessionOutcome.VersionUnsupported(version)
+
+	# A field of the wrong type is a defective record, not a field to be defaulted away.
+	# Silently substituting an empty refresh token or an empty `raw` would hand back a
+	# session that has quietly lost the ability to refresh, or lost backend data a consumer
+	# reads.
+	for text_key: String in ["origin", "access_token", "refresh_token", "provider"]:
+		if _is_present_with_another_type(payload, text_key, TYPE_STRING):
+			return StoredSessionOutcome.Malformed("the record's %s is not a string" % text_key)
+	for dictionary_key: String in ["raw", "extras"]:
+		if _is_present_with_another_type(payload, dictionary_key, TYPE_DICTIONARY):
+			return StoredSessionOutcome.Malformed("the record's %s is not an object" % dictionary_key)
 
 	var stored_origin: String = _text_of(payload, "origin")
 	if stored_origin.is_empty():
@@ -167,6 +183,15 @@ static func _name_of(value: Provider) -> String:
 		Provider.EMAIL_PASSWORD:
 			return "email_password"
 	return ""
+
+## Returns whether [param key] is present carrying something other than [param expected_type].
+##
+## Absent is not "another type" — an absent optional field has a defined meaning here,
+## while a field of the wrong type has none.
+static func _is_present_with_another_type(payload: Dictionary, key: String, expected_type: int) -> bool:
+	if not payload.has(key):
+		return false
+	return typeof(payload[key]) != expected_type
 
 ## The string at [param key], or the empty string when it is absent or not a string.
 ##
