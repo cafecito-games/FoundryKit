@@ -358,7 +358,7 @@ async func refresh_session() -> SessionResult:
 async func restore_session() -> SessionResult:
 	var generation: int = _session_generation
 	var sign_in_generation: int = _sign_in_generation
-	var result: SessionResult = await _backend.restore_session()
+	var result: SessionResult = await _backend.restore_session(_origin_of(_config.base_url))
 	match result:
 		SessionResult.Failure(_error):
 			return result

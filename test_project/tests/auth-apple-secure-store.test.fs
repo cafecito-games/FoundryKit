@@ -72,6 +72,19 @@ func _describe_load(outcome: SecureLoadOutcome) -> String:
 func test_is_available_when_the_native_is_present() -> void:
 	Expect.that(_store.is_available()).to_be_true()
 
+func test_has_value_reports_present_and_drains_the_loaded_bytes() -> void:
+	_native.next_load_status = FakeKeychainNative.STATUS_SUCCESS
+	_native.bytes_to_load = PackedByteArray([1, 2, 3])
+	Expect.that(_store.has_value()).to_be_true()
+	Expect.that(_native.load_call_count).to_equal(1)
+	Expect.that(_native.take_loaded_value_call_count).to_equal(1)
+
+func test_has_value_reports_absent_without_collecting_bytes() -> void:
+	_native.next_load_status = FakeKeychainNative.STATUS_ABSENT
+	Expect.that(_store.has_value()).to_be_false()
+	Expect.that(_native.load_call_count).to_equal(1)
+	Expect.that(_native.take_loaded_value_call_count).to_equal(0)
+
 func test_store_writes_the_bytes_under_the_fixed_account() -> void:
 	var bytes: PackedByteArray = PackedByteArray([1, 2, 3])
 	var result: CompletionResult = await _store.store(bytes)
@@ -161,6 +174,7 @@ func test_erase_failure_maps_to_storage_error() -> void:
 func test_without_the_native_class_every_operation_resolves_unavailable_without_hanging() -> void:
 	var bare: AppleSecureStore = AppleSecureStore.new(FoundryKitLog.new("test"))
 	Expect.that(bare.is_available()).to_be_false()
+	Expect.that(bare.has_value()).to_be_false()
 	Expect.that(_describe_load(await bare.load())).to_equal("absent")
 	Expect.that(_describe_completion(await bare.store(PackedByteArray([1])))) \
 			.to_equal("fail:storage")

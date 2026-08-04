@@ -157,10 +157,10 @@ async func sign_in_silent(provider: Provider) -> CredentialResult:
 async func sign_out(_provider: Provider) -> CompletionResult:
 	return CompletionResult.Success
 
-async func store_session(_session: AuthSession) -> CompletionResult:
+async func store_session(_session: AuthSession, _origin: String) -> CompletionResult:
 	return CompletionResult.Failure(AuthError.Storage(_STORAGE_DETAIL))
 
-async func restore_session() -> SessionResult:
+async func restore_session(_origin: String) -> SessionResult:
 	return SessionResult.Failure(AuthError.Storage(_STORAGE_DETAIL))
 
 func has_stored_session() -> bool:

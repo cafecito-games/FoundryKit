@@ -8,8 +8,8 @@ import games.cafecito.foundrykit.core
 ## Every native call is synchronous — `SecItemAdd`, `SecItemCopyMatching`,
 ## `SecItemUpdate` and `SecItemDelete` all return before they yield — so unlike
 ## [AppleAuthBackend]'s Google surface this store needs no [NativeRequest], no signal and
-## no correlation token. The trait's methods stay `async` for contract uniformity, but
-## none of them ever suspends.
+## no correlation token. The trait's I/O methods stay `async` for contract uniformity,
+## but none of them ever suspends; its presence query is synchronous.
 ##
 ## A missing binary is never an error: the headless test suite and any consumer that
 ## deleted `bin/auth/` from a partial install both resolve here to
@@ -53,6 +53,19 @@ func _init(log: FoundryKitLog, native_override: Object? = null) -> void:
 
 func is_available() -> bool:
 	return _native != null
+
+func has_value() -> bool:
+	var native: Object? = _native
+	if native == null:
+		return false
+	var target: Object = native
+	var status: int = _status_of(target.call("load", _ACCOUNT))
+	if status != _STATUS_SUCCESS:
+		return false
+	# A successful native load retains the bytes until collection. Presence needs only the
+	# status, so drain them immediately rather than leaving session tokens resident there.
+	target.call("takeLoadedValue")
+	return true
 
 async func store(bytes: PackedByteArray) -> CompletionResult:
 	var native: Object? = _native

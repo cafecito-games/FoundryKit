@@ -1112,10 +1112,10 @@ class FakeAuthBackend extends RefCounted uses AuthBackend:
 			await _released
 		return CompletionResult.Success
 
-	async func store_session(_session: AuthSession) -> CompletionResult:
+	async func store_session(_session: AuthSession, _origin: String) -> CompletionResult:
 		return CompletionResult.Success
 
-	async func restore_session() -> SessionResult:
+	async func restore_session(_origin: String) -> SessionResult:
 		if suspends:
 			await _released
 		return restore_result

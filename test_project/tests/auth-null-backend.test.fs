@@ -77,7 +77,8 @@ func test_storage_operations_fail_with_storage_error() -> void:
 	var raw: Dictionary[String, Variant] = {}
 	var extras: Dictionary[String, Variant] = {}
 	var stored: CompletionResult = await _backend.store_session(
-			AuthSession.new("a", "r", Provider.GOOGLE, raw, extras))
+			AuthSession.new("a", "r", Provider.GOOGLE, raw, extras),
+			"https://api.example.com")
 	var described: String = ""
 	match stored:
 		CompletionResult.Success:
@@ -101,6 +102,32 @@ func test_storage_operations_fail_with_storage_error() -> void:
 				AuthError.SessionExpired(_e):
 					described = "other"
 				AuthError.TimedOut(_t):
+					described = "other"
+	Expect.that(described).to_equal("storage")
+	described = ""
+	var restored: SessionResult = await _backend.restore_session("https://api.example.com")
+	match restored:
+		SessionResult.Success(_session):
+			described = "ok"
+		SessionResult.Failure(error):
+			match error:
+				AuthError.Storage(_detail):
+					described = "storage"
+				AuthError.Cancelled, AuthError.NoCredential:
+					described = "other"
+				AuthError.Unavailable(_provider):
+					described = "other"
+				AuthError.Configuration(_detail):
+					described = "other"
+				AuthError.RequestFailed(_status, _body):
+					described = "other"
+				AuthError.InvalidResponse(_detail):
+					described = "other"
+				AuthError.MissingField(_field):
+					described = "other"
+				AuthError.SessionExpired(_expired_at):
+					described = "other"
+				AuthError.TimedOut(_elapsed_seconds):
 					described = "other"
 	Expect.that(described).to_equal("storage")
 	Expect.that(_backend.has_stored_session()).to_be_false()

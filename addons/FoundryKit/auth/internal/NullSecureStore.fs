@@ -17,6 +17,9 @@ const _STORAGE_DETAIL: String = "secure session storage is unavailable on this p
 func is_available() -> bool:
 	return false
 
+func has_value() -> bool:
+	return false
+
 async func store(_bytes: PackedByteArray) -> CompletionResult:
 	return CompletionResult.Failure(AuthError.Storage(_STORAGE_DETAIL))
 

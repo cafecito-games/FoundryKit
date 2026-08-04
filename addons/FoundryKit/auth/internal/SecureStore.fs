@@ -9,10 +9,11 @@ import games.cafecito.foundrykit.auth
 ## composes a platform implementation such as an Apple Keychain wrapper; tests compose a
 ## fake that records what it was handed and can be primed with any [SecureLoadOutcome].
 ##
-## Every method is declared `async` for contract uniformity with the rest of the auth
-## surface, but no implementation may ever suspend: awaiting an already-completed
-## coroutine hangs this engine's test runner rather than failing it, and every native
-## surface this seam is expected to reach (the Keychain) is synchronous.
+## Mutating and loading operations are declared `async` for contract uniformity with the
+## rest of the auth surface, but no implementation may ever suspend: awaiting an
+## already-completed coroutine hangs this engine's test runner rather than failing it,
+## and every native surface this seam reaches (the Keychain) is synchronous. Presence is
+## synchronous so [method AuthBackend.has_stored_session] can report durable state.
 ##
 ## Deliberately free of session vocabulary. This trait moves opaque bytes and reports how
 ## the attempt ended; interpreting those bytes as a [code]StoredSession[/code] belongs to
@@ -25,6 +26,13 @@ trait_name SecureStore
 ## the storage binary from a partial install" — both mean "not available", and neither is
 ## an error.
 abstract func is_available() -> bool
+
+## Reports whether secure storage currently holds an opaque value.
+##
+## This query is synchronous because [method AuthBackend.has_stored_session] is
+## synchronous and must reflect durable storage even in a newly constructed backend.
+## Implementations that probe by loading must immediately discard the loaded bytes.
+abstract func has_value() -> bool
 
 ## Writes [param bytes] to secure storage, replacing whatever was previously stored.
 abstract async func store(bytes: PackedByteArray) -> CompletionResult

@@ -13,11 +13,13 @@ uses Test
 const _TOKEN: String = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEyMyIsImV4cCI6MTc1MDAwMDAwMH0.sig"
 
 var _native: FakeGoogleNative
+var _secure_store: FakeSecureStore
 var _backend: AppleAuthBackend
 
 func before_each() -> void:
 	_native = FakeGoogleNative.new()
-	_backend = AppleAuthBackend.new(FoundryKitLog.new("test"), _native)
+	_secure_store = FakeSecureStore.new()
+	_backend = AppleAuthBackend.new(FoundryKitLog.new("test"), _native, _secure_store)
 
 func after_each() -> void:
 	_native.free()
@@ -78,11 +80,40 @@ func _describe_completion(result: CompletionResult) -> String:
 
 func _describe_session(result: SessionResult) -> String:
 	match result:
-		SessionResult.Success(_session):
-			return "ok"
+		SessionResult.Success(session):
+			return "ok:%s:%s" % [session.access_token, session.refresh_token]
 		SessionResult.Failure(error):
 			return "fail:%s" % _error_name(error)
 	return "unreachable"
+
+func _session_from(result: SessionResult) -> AuthSession:
+	match result:
+		SessionResult.Success(session):
+			return session
+		SessionResult.Failure(_error):
+			Expect.that(false).to_be_true()
+	return AuthSession.new()
+
+func _stored_record_from(bytes: PackedByteArray) -> StoredSession:
+	match StoredSession.from_bytes(bytes):
+		StoredSessionOutcome.Parsed(record):
+			return record
+		StoredSessionOutcome.Malformed(_detail):
+			Expect.that(false).to_be_true()
+		StoredSessionOutcome.VersionUnsupported(_version):
+			Expect.that(false).to_be_true()
+	return StoredSession.new()
+
+func _session_with_every_field() -> AuthSession:
+	var raw: Dictionary[String, Variant] = {
+		"profile": {"display_name": "Ada"},
+		"issued_at": 1720000000.125,
+	}
+	var extras: Dictionary[String, Variant] = {
+		"scope": "openid profile",
+		"locale": "fr-CA",
+	}
+	return AuthSession.new("access-a", "refresh-r", Provider.APPLE, raw, extras)
 
 func test_backend_name() -> void:
 	Expect.that(_backend.backend_name()).to_equal("apple")
@@ -197,18 +228,123 @@ func test_without_the_native_class_sign_in_resolves_unavailable_without_hanging(
 	Expect.that(_describe(await bare.sign_in(Provider.GOOGLE))).to_equal("fail:unavailable")
 	Expect.that(_describe(await bare.sign_in_silent(Provider.GOOGLE))).to_equal("fail:unavailable")
 	Expect.that(_describe_completion(await bare.sign_out(Provider.GOOGLE))).to_equal("ok")
+	Expect.that(_describe_completion(await bare.store_session(
+			AuthSession.new("a", "r"), "https://api.example.com"))).to_equal("fail:storage")
+	Expect.that(_describe_session(await bare.restore_session(
+			"https://api.example.com"))).to_equal("fail:storage")
+	Expect.that(bare.has_stored_session()).to_be_false()
+	Expect.that(_describe_completion(await bare.clear_stored_session())).to_equal("ok")
 
 func test_sign_out_reaches_the_native_and_succeeds() -> void:
 	_configure()
 	Expect.that(_describe_completion(await _backend.sign_out(Provider.GOOGLE))).to_equal("ok")
 	Expect.that(_native.last_request_token.is_empty()).to_be_false()
 
-func test_storage_is_unavailable_until_keychain_lands() -> void:
-	var raw: Dictionary[String, Variant] = {}
-	var extras: Dictionary[String, Variant] = {}
-	var stored: CompletionResult = await _backend.store_session(
-			AuthSession.new("a", "r", Provider.GOOGLE, raw, extras))
-	Expect.that(_describe_completion(stored)).to_equal("fail:storage")
-	Expect.that(_describe_session(await _backend.restore_session())).to_equal("fail:storage")
+func test_store_session_binds_the_record_to_the_supplied_origin() -> void:
+	var session: AuthSession = _session_with_every_field()
+	var result: CompletionResult = await _backend.store_session(
+			session, "https://issuer.example.com:8443")
+	Expect.that(_describe_completion(result)).to_equal("ok")
+	Expect.that(_secure_store.store_count).to_equal(1)
+	var record: StoredSession = _stored_record_from(_secure_store.last_stored_bytes)
+	Expect.that(record.origin).to_equal("https://issuer.example.com:8443")
+	Expect.that(record.access_token).to_equal(session.access_token)
+	Expect.that(record.refresh_token).to_equal(session.refresh_token)
+	Expect.that(record.provider).to_equal(session.provider)
+	Expect.that(record.raw).to_equal(session.raw)
+	Expect.that(record.extras).to_equal(session.extras)
+
+## Both assertions are security properties. The first mutation check removes the origin
+## comparison and must fail here by returning `ok:foreign-access:foreign-refresh`; the
+## second removes the erase and must fail on `erase_count`.
+func test_restore_session_refuses_and_erases_a_foreign_origin() -> void:
+	var foreign: StoredSession = StoredSession.from_session(
+			AuthSession.new("foreign-access", "foreign-refresh"),
+			"https://api-a.example.com")
+	_secure_store.stored_value_present = true
+	_secure_store.next_load_outcome = SecureLoadOutcome.Loaded(foreign.to_bytes())
+	var result: SessionResult = await _backend.restore_session("https://api-b.example.com")
+	Expect.that(_describe_session(result)).to_equal("fail:storage")
+	Expect.that(_secure_store.erase_count).to_equal(1)
 	Expect.that(_backend.has_stored_session()).to_be_false()
+
+func test_a_failed_foreign_record_erase_leaves_durable_presence_true() -> void:
+	var foreign: StoredSession = StoredSession.from_session(
+			AuthSession.new("foreign-access", "foreign-refresh"),
+			"https://api-a.example.com")
+	_secure_store.stored_value_present = true
+	_secure_store.next_load_outcome = SecureLoadOutcome.Loaded(foreign.to_bytes())
+	_secure_store.next_erase_result = CompletionResult.Failure(
+			AuthError.Storage("Keychain erase failed"))
+	var result: SessionResult = await _backend.restore_session("https://api-b.example.com")
+	Expect.that(_describe_session(result)).to_equal("fail:storage")
+	Expect.that(_secure_store.erase_count).to_equal(1)
+	Expect.that(_backend.has_stored_session()).to_be_true()
+
+func test_restore_session_with_a_matching_origin_preserves_every_field() -> void:
+	var original: AuthSession = _session_with_every_field()
+	var record: StoredSession = StoredSession.from_session(
+			original, "https://api.example.com")
+	_secure_store.next_load_outcome = SecureLoadOutcome.Loaded(record.to_bytes())
+	var restored: AuthSession = _session_from(
+			await _backend.restore_session("https://api.example.com"))
+	Expect.that(restored.access_token).to_equal(original.access_token)
+	Expect.that(restored.refresh_token).to_equal(original.refresh_token)
+	Expect.that(restored.provider).to_equal(original.provider)
+	Expect.that(restored.raw).to_equal(original.raw)
+	Expect.that(restored.extras).to_equal(original.extras)
+	Expect.that(_secure_store.erase_count).to_equal(0)
+
+func test_restore_session_erases_a_malformed_record() -> void:
+	_secure_store.next_load_outcome = SecureLoadOutcome.Loaded(
+			PackedByteArray([0xFF, 0x00]))
+	Expect.that(_describe_session(
+			await _backend.restore_session("https://api.example.com"))).to_equal("fail:storage")
+	Expect.that(_secure_store.erase_count).to_equal(1)
+
+func test_restore_session_erases_an_unsupported_record_version() -> void:
+	var bytes: PackedByteArray = JSON.stringify({
+		"schema_version": 99,
+		"origin": "https://api.example.com",
+	}).to_utf8_buffer()
+	_secure_store.next_load_outcome = SecureLoadOutcome.Loaded(bytes)
+	Expect.that(_describe_session(
+			await _backend.restore_session("https://api.example.com"))).to_equal("fail:storage")
+	Expect.that(_secure_store.erase_count).to_equal(1)
+
+func test_restore_session_reports_a_store_load_failure_without_erasing() -> void:
+	_secure_store.next_load_outcome = SecureLoadOutcome.Failed("Keychain locked")
+	Expect.that(_describe_session(
+			await _backend.restore_session("https://api.example.com"))).to_equal("fail:storage")
+	Expect.that(_secure_store.erase_count).to_equal(0)
+
+func test_restore_session_reports_absent_and_has_stored_session_is_false() -> void:
+	_secure_store.next_load_outcome = SecureLoadOutcome.Absent
+	Expect.that(_describe_session(
+			await _backend.restore_session("https://api.example.com"))).to_equal("fail:storage")
+	Expect.that(_secure_store.erase_count).to_equal(0)
+	Expect.that(_backend.has_stored_session()).to_be_false()
+
+func test_a_fresh_backend_reports_a_preexisting_durable_session() -> void:
+	_secure_store.stored_value_present = true
+	var fresh: AppleAuthBackend = AppleAuthBackend.new(
+			FoundryKitLog.new("test"), _native, _secure_store)
+	Expect.that(fresh.has_stored_session()).to_be_true()
+
+func test_has_stored_session_reflects_successful_store_and_clear_operations() -> void:
+	await _backend.store_session(
+			AuthSession.new("a", "r"), "https://api.example.com")
+	Expect.that(_backend.has_stored_session()).to_be_true()
+	await _backend.clear_stored_session()
+	Expect.that(_backend.has_stored_session()).to_be_false()
+
+func test_has_stored_session_is_false_when_the_store_is_unavailable() -> void:
+	_secure_store.available = false
+	var record: StoredSession = StoredSession.from_session(
+			AuthSession.new("a", "r"), "https://api.example.com")
+	_secure_store.next_load_outcome = SecureLoadOutcome.Loaded(record.to_bytes())
+	Expect.that(_backend.has_stored_session()).to_be_false()
+
+func test_clear_stored_session_delegates_to_the_store() -> void:
 	Expect.that(_describe_completion(await _backend.clear_stored_session())).to_equal("ok")
+	Expect.that(_secure_store.erase_count).to_equal(1)

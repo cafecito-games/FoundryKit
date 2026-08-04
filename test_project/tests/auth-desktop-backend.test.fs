@@ -610,8 +610,10 @@ func test_sign_out_succeeds_because_there_is_nothing_native_to_sign_out_of() -> 
 	Expect.that(_describe_completion(await _backend.sign_out(Provider.GOOGLE))).to_equal("ok")
 
 func test_session_storage_is_not_implemented_on_this_backend() -> void:
-	Expect.that(_describe_completion(await _backend.store_session(AuthSession.new()))) \
+	Expect.that(_describe_completion(await _backend.store_session(
+			AuthSession.new(), "https://api.example.com"))) \
 			.to_equal("fail:storage")
-	Expect.that(_describe_session(await _backend.restore_session())).to_equal("fail:storage")
+	Expect.that(_describe_session(await _backend.restore_session(
+			"https://api.example.com"))).to_equal("fail:storage")
 	Expect.that(_backend.has_stored_session()).to_be_false()
 	Expect.that(_describe_completion(await _backend.clear_stored_session())).to_equal("ok")

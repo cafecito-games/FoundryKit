@@ -34,11 +34,11 @@ abstract async func sign_in_silent(provider: Provider) -> CredentialResult
 ## Signs out of the native provider. Does not touch the backend session.
 abstract async func sign_out(provider: Provider) -> CompletionResult
 
-## Writes a session to platform secure storage.
-abstract async func store_session(session: AuthSession) -> CompletionResult
+## Writes a session to platform secure storage, bound to the backend origin that issued it.
+abstract async func store_session(session: AuthSession, origin: String) -> CompletionResult
 
-## Reads the stored session back.
-abstract async func restore_session() -> SessionResult
+## Reads a stored session only when it was issued by [param origin].
+abstract async func restore_session(origin: String) -> SessionResult
 
 ## Returns whether secure storage currently holds a session.
 abstract func has_stored_session() -> bool

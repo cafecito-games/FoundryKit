@@ -17,6 +17,9 @@ uses SecureStore
 ## Whether [method is_available] reports storage as usable. Defaults to available.
 var available: bool = true
 
+## Whether durable storage currently holds a value.
+var stored_value_present: bool = false
+
 ## How many times [method store] has been called since construction or [method reset].
 var store_count: int = 0
 
@@ -40,6 +43,7 @@ var next_erase_result: CompletionResult = CompletionResult.Success
 func reset() -> void:
 	store_count = 0
 	erase_count = 0
+	stored_value_present = false
 	last_stored_bytes = PackedByteArray()
 	next_load_outcome = SecureLoadOutcome.Absent
 	next_store_result = CompletionResult.Success
@@ -48,9 +52,17 @@ func reset() -> void:
 func is_available() -> bool:
 	return available
 
+func has_value() -> bool:
+	return available and stored_value_present
+
 async func store(bytes: PackedByteArray) -> CompletionResult:
 	store_count += 1
 	last_stored_bytes = bytes
+	match next_store_result:
+		CompletionResult.Success:
+			stored_value_present = true
+		CompletionResult.Failure(_error):
+			pass
 	return next_store_result
 
 async func load() -> SecureLoadOutcome:
@@ -58,4 +70,9 @@ async func load() -> SecureLoadOutcome:
 
 async func erase() -> CompletionResult:
 	erase_count += 1
+	match next_erase_result:
+		CompletionResult.Success:
+			stored_value_present = false
+		CompletionResult.Failure(_error):
+			pass
 	return next_erase_result
