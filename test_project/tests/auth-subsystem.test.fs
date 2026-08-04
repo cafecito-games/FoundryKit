@@ -26,6 +26,14 @@ const _EXPIRED_TOKEN: String = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEyMyIsImV
 
 const _REFRESH_TOKEN: String = "refresh-token-value"
 
+const _ORIGIN_A_ACCESS_TOKEN: String = "origin-a-access-token"
+
+const _ORIGIN_A_REFRESH_TOKEN: String = "origin-a-refresh-token"
+
+const _STORAGE_ERROR_ACCESS_SENTINEL: String = "storage-error-access-token-sentinel"
+
+const _STORAGE_ERROR_REFRESH_SENTINEL: String = "storage-error-refresh-token-sentinel"
+
 var _auth: AuthSubsystem
 
 var _log: FoundryKitLog
@@ -43,6 +51,7 @@ func before_each() -> void:
 	_auth = AuthSubsystem.new(FoundryKitLog.new("test").child("auth"))
 
 	_log = FoundryKitLog.new("test").child("auth")
+	_log.set_capture_enabled(true)
 	_transport = FakeHttpClient.new()
 	_config = BackendConfig.new("https://api.example.com")
 	_backend = FakeAuthBackend.new()
@@ -139,6 +148,39 @@ func test_a_successful_exchange_returns_and_installs_the_session() -> void:
 	Expect.that(_describe_session(result)).to_equal("ok:issued-access-token")
 	Expect.that(_subsystem.has_session()).to_be_true()
 	Expect.that(_subsystem.access_token()).to_equal("issued-access-token")
+
+func test_a_successful_exchange_stores_the_session_against_the_configured_origin() -> void:
+	# The configured URL deliberately carries a trailing slash. Persistence binds to the
+	# comparable origin, not to URL punctuation that url_for already ignores.
+	_subsystem.configure_backend(BackendConfig.new("https://api.example.com/"))
+	_backend.credential_result = CredentialResult.Success(_google_credential())
+	_transport.enqueue(HttpOutcome.Answered(200, _issued_session_json()))
+	await _subsystem.sign_in(Provider.GOOGLE)
+	Expect.that(_backend.store_count).to_equal(1)
+	Expect.that(_backend.last_store_origin).to_equal("https://api.example.com")
+	Expect.that(_backend.last_stored_session.access_token).to_equal("issued-access-token")
+	Expect.that(_backend.last_stored_session.refresh_token).to_equal("issued-refresh-token")
+
+func test_a_store_failure_leaves_the_successful_sign_in_installed_and_logs_no_tokens() -> void:
+	_backend.credential_result = CredentialResult.Success(_google_credential())
+	_backend.next_store_result = CompletionResult.Failure(AuthError.Storage(
+			"write rejected access=%s refresh=%s" % [
+				_STORAGE_ERROR_ACCESS_SENTINEL,
+				_STORAGE_ERROR_REFRESH_SENTINEL,
+			]))
+	_transport.enqueue(HttpOutcome.Answered(200, _issued_session_json()))
+	var result: SessionResult = await _subsystem.sign_in(Provider.GOOGLE)
+	Expect.that(_describe_session(result)).to_equal("ok:issued-access-token")
+	Expect.that(_subsystem.has_session()).to_be_true()
+	Expect.that(_subsystem.access_token()).to_equal("issued-access-token")
+	Expect.that(_backend.has_stored_session()).to_be_false()
+	Expect.that(_log.captured().size()).to_equal(1)
+	for line: String in _log.captured():
+		Expect.that(line.contains("persist")).to_be_true()
+		Expect.that(line.contains("issued-access-token")).to_be_false()
+		Expect.that(line.contains("issued-refresh-token")).to_be_false()
+		Expect.that(line.contains(_STORAGE_ERROR_ACCESS_SENTINEL)).to_be_false()
+		Expect.that(line.contains(_STORAGE_ERROR_REFRESH_SENTINEL)).to_be_false()
 
 func test_the_exchange_posts_the_credential_to_the_configured_path() -> void:
 	_backend.credential_result = CredentialResult.Success(_google_credential())
@@ -264,6 +306,80 @@ func test_refresh_session_delegates_to_the_session_store() -> void:
 			"{\"refresh_token\":\"%s\"}" % _REFRESH_TOKEN)
 	Expect.that(_subsystem.access_token()).to_equal("fresh-access-token")
 
+func test_a_refresh_that_rotates_tokens_re_stores_the_session() -> void:
+	await _install_session("access-one", _REFRESH_TOKEN)
+	_transport.enqueue(HttpOutcome.Answered(200, _fresh_session_json()))
+	await _subsystem.refresh_session()
+	Expect.that(_backend.store_count).to_equal(1)
+	Expect.that(_backend.last_store_origin).to_equal("https://api.example.com")
+	Expect.that(_backend.last_stored_session.access_token).to_equal("fresh-access-token")
+	Expect.that(_backend.last_stored_session.refresh_token).to_equal("fresh-refresh-token")
+
+func test_two_sequential_token_rotations_produce_exactly_two_durable_writes() -> void:
+	await _rotate_once()
+	_transport.enqueue(HttpOutcome.Answered(200, _json({
+		"access_token": "second-access-token",
+		"refresh_token": "second-refresh-token",
+	})))
+	await _subsystem.refresh_session()
+	Expect.that(_backend.store_count).to_equal(2)
+	Expect.that(_backend.last_stored_session.access_token).to_equal("second-access-token")
+	Expect.that(_backend.last_stored_session.refresh_token).to_equal("second-refresh-token")
+
+func test_install_after_a_rotation_does_not_make_an_unchanged_refresh_store_again() -> void:
+	await _rotate_once()
+	_backend.credential_result = CredentialResult.Success(_google_credential())
+	_transport.enqueue(HttpOutcome.Answered(200, _issued_session_json()))
+	await _subsystem.sign_in(Provider.GOOGLE)
+	_transport.enqueue(HttpOutcome.Answered(200, _issued_session_json()))
+	await _subsystem.refresh_session()
+	Expect.that(_backend.store_count).to_equal(2)
+
+func test_restore_after_a_rotation_does_not_make_a_failed_refresh_store_again() -> void:
+	await _rotate_once()
+	_backend.restore_result = SessionResult.Success(_session("restored-token", "restored-refresh"))
+	await _subsystem.restore_session()
+	_transport.enqueue(HttpOutcome.TimedOut(9.5))
+	await _subsystem.refresh_session()
+	Expect.that(_backend.store_count).to_equal(1)
+
+func test_clear_after_a_rotation_does_not_make_an_unchanged_refresh_store_again() -> void:
+	await _rotate_once()
+	await _subsystem.clear_session()
+	_backend.restore_result = SessionResult.Success(_session("restored-token", "restored-refresh"))
+	await _subsystem.restore_session()
+	_transport.enqueue(HttpOutcome.Answered(200, _json({
+		"access_token": "restored-token",
+		"refresh_token": "restored-refresh",
+	})))
+	await _subsystem.refresh_session()
+	Expect.that(_backend.store_count).to_equal(1)
+
+func test_reconfiguration_after_a_rotation_does_not_make_a_failed_refresh_store_again() -> void:
+	await _rotate_once()
+	_subsystem.configure_backend(BackendConfig.new("https://other.example.com"))
+	_backend.restore_result = SessionResult.Success(_session("restored-token", "restored-refresh"))
+	await _subsystem.restore_session()
+	_transport.enqueue(HttpOutcome.TimedOut(9.5))
+	await _subsystem.refresh_session()
+	Expect.that(_backend.store_count).to_equal(1)
+
+func test_a_failed_refresh_does_not_store_the_session() -> void:
+	await _install_session(_EXPIRED_TOKEN, _REFRESH_TOKEN)
+	_transport.enqueue(HttpOutcome.TimedOut(9.5))
+	await _subsystem.refresh_session()
+	Expect.that(_backend.store_count).to_equal(0)
+
+func test_a_successful_refresh_that_rotates_nothing_does_not_store_the_session() -> void:
+	await _install_session(_EXPIRED_TOKEN, _REFRESH_TOKEN)
+	_transport.enqueue(HttpOutcome.Answered(200, _json({
+		"access_token": _EXPIRED_TOKEN,
+		"refresh_token": _REFRESH_TOKEN,
+	})))
+	var result: SessionResult = await _subsystem.refresh_session()
+	Expect.that(_describe_session(result)).to_equal("ok:" + _EXPIRED_TOKEN)
+	Expect.that(_backend.store_count).to_equal(0)
+
 func test_refresh_session_without_a_session_reports_the_session_expired() -> void:
 	var result: SessionResult = await _subsystem.refresh_session()
 	Expect.that(_describe_session(result)).to_equal("fail:session_expired:0")
@@ -356,9 +472,9 @@ func test_a_rotation_announces_the_refreshed_tokens_once() -> void:
 	Expect.that(_last_refreshed_token).to_equal("fresh-access-token")
 
 func test_concurrent_callers_announce_one_rotation_between_them() -> void:
-	# One round, one rotation, one announcement. A subsystem that announces per caller
-	# instead of per rotation emits three times here — and the store, which counts rotations
-	# rather than emitting, cannot tell it apart on its own.
+	# One round, one rotation, one announcement and one durable write. A subsystem that acts
+	# per caller instead of per rotation emits or stores three times here — and the store,
+	# which counts rotations rather than emitting, cannot tell it apart on its own.
 	await _install_session(_EXPIRED_TOKEN, _REFRESH_TOKEN)
 	_transport.enqueue(HttpOutcome.Answered(200, _fresh_session_json()))
 	var first: Coroutine[TokenResult] = _subsystem.valid_access_token()
@@ -369,6 +485,7 @@ func test_concurrent_callers_announce_one_rotation_between_them() -> void:
 	Expect.that(_describe_token(await third)).to_equal("ok:fresh-access-token")
 	Expect.that(_transport.send_count).to_equal(1)
 	Expect.that(_tokens_refreshed_count).to_equal(1)
+	Expect.that(_backend.store_count).to_equal(1)
 
 func test_two_rotations_are_announced_twice() -> void:
 	await _install_session(_EXPIRED_TOKEN, _REFRESH_TOKEN)
@@ -665,6 +782,45 @@ func test_moving_to_a_different_origin_announces_nothing() -> void:
 	Expect.that(_session_expired_count).to_equal(0)
 	Expect.that(_tokens_refreshed_count).to_equal(0)
 
+func test_a_session_stored_under_one_origin_never_reaches_another() -> void:
+	# Use the real origin-checking Apple backend over a fake durable store. This is the
+	# restart-shaped hole: the persisted origin outlives the subsystem's in-memory generation.
+	var native: FakeGoogleNative = FakeGoogleNative.new()
+	var secure_store: FakeSecureStore = FakeSecureStore.new()
+	var backend: AppleAuthBackend = AppleAuthBackend.new(_log, native, secure_store)
+	var recording: RecordingTransport = RecordingTransport.new(_transport)
+	var subsystem: AuthSubsystem = AuthSubsystem.new(
+			_log, recording, BackendConfig.new("https://origin-a.example.com"), backend)
+	subsystem.configure(ProviderConfig.Google("web-client-id", "ios-client-id", "desktop-id"))
+
+	_transport.enqueue(HttpOutcome.Answered(200, _json({
+		"access_token": _ORIGIN_A_ACCESS_TOKEN,
+		"refresh_token": _ORIGIN_A_REFRESH_TOKEN,
+	})))
+	var signing_in: Coroutine[SessionResult] = subsystem.sign_in(Provider.GOOGLE)
+	native.emit_success(native.last_request_token, "google-id-token", "player@example.com", "Player One")
+	Expect.that(_describe_session(await signing_in)).to_equal("ok:" + _ORIGIN_A_ACCESS_TOKEN)
+	Expect.that(secure_store.stored_value_present).to_be_true()
+	secure_store.next_load_outcome = SecureLoadOutcome.Loaded(secure_store.last_stored_bytes)
+
+	# Reconfiguration drops only the in-memory session. The durable record is exactly what a
+	# fresh process would still find when the game next restores against origin B.
+	subsystem.configure_backend(BackendConfig.new("https://origin-b.example.com"))
+	var restored: SessionResult = await subsystem.restore_session()
+	Expect.that(_describe_session(restored)).to_equal("fail:storage")
+	Expect.that(secure_store.stored_value_present).to_be_false()
+
+	# Exercise both credential-bearing paths after the refused restore. If the foreign
+	# session was installed, the request presents its access token and the refresh presents
+	# its refresh token. Record every header and body so neither can hide behind a later call.
+	_transport.enqueue(HttpOutcome.Answered(200, "{}".to_utf8_buffer()))
+	_transport.enqueue(HttpOutcome.Answered(200, _fresh_session_json()))
+	await subsystem.request(HttpMethod.GET, "/me", null)
+	await subsystem.refresh_session()
+	Expect.that(recording.contains_secret(_ORIGIN_A_ACCESS_TOKEN)).to_be_false()
+	Expect.that(recording.contains_secret(_ORIGIN_A_REFRESH_TOKEN)).to_be_false()
+	native.free()
+
 func test_a_refused_request_is_not_replayed_against_a_backend_moved_under_it() -> void:
 	# The first attempt was authorized at the original backend and refused there. Refreshing
 	# and replaying after the move would send the previous backend's refresh token to the new
@@ -832,6 +988,12 @@ func test_restore_session_installs_what_the_backend_returned() -> void:
 	Expect.that(_subsystem.has_session()).to_be_true()
 	Expect.that(_subsystem.access_token()).to_equal("restored-token")
 
+func test_restore_session_passes_the_normalized_configured_origin_to_the_backend() -> void:
+	_subsystem.configure_backend(BackendConfig.new("https://api.example.com/"))
+	_backend.restore_result = SessionResult.Failure(AuthError.Storage("nothing stored"))
+	await _subsystem.restore_session()
+	Expect.that(_backend.last_restore_origin).to_equal("https://api.example.com")
+
 func test_a_failed_restore_leaves_the_subsystem_without_a_session() -> void:
 	_backend.restore_result = SessionResult.Failure(AuthError.Storage("nothing stored"))
 	var result: SessionResult = await _subsystem.restore_session()
@@ -843,10 +1005,14 @@ func test_signing_out_reaches_the_native_backend() -> void:
 	await _subsystem.sign_out(Provider.APPLE)
 	Expect.that(_backend.sign_out_count).to_equal(1)
 
-func test_clearing_the_session_reaches_the_native_storage() -> void:
-	await _install_session("access-one", _REFRESH_TOKEN)
+func test_clearing_the_session_erases_the_durable_record() -> void:
+	_backend.credential_result = CredentialResult.Success(_google_credential())
+	_transport.enqueue(HttpOutcome.Answered(200, _issued_session_json()))
+	await _subsystem.sign_in(Provider.GOOGLE)
+	Expect.that(_backend.has_stored_session()).to_be_true()
 	await _subsystem.clear_session()
 	Expect.that(_backend.clear_count).to_equal(1)
+	Expect.that(_backend.has_stored_session()).to_be_false()
 
 func test_the_request_guard_is_reachable() -> void:
 	Expect.that(_subsystem.request_guard().is_active()).to_be_false()
@@ -858,6 +1024,12 @@ func test_the_request_guard_is_reachable() -> void:
 async func _install_session(access_token: String, refresh_token: String) -> void:
 	_backend.restore_result = SessionResult.Success(_session(access_token, refresh_token))
 	await _subsystem.restore_session()
+
+## Establishes one persisted rotation while leaving the refreshed session active.
+async func _rotate_once() -> void:
+	await _install_session("access-one", _REFRESH_TOKEN)
+	_transport.enqueue(HttpOutcome.Answered(200, _fresh_session_json()))
+	await _subsystem.refresh_session()
 
 func _session(access_token: String, refresh_token: String) -> AuthSession:
 	var raw: Dictionary[String, Variant] = {}
@@ -1048,6 +1220,41 @@ class SuspendingTransport extends RefCounted uses HttpTransport:
 			await _released
 		return await _inner.send(method, url, headers, body, timeout_seconds)
 
+## A [HttpTransport] that keeps every request for token-secrecy assertions.
+##
+## [FakeHttpClient] intentionally retains only the last request. The cross-origin regression
+## needs the stronger statement that no request at any point carried either foreign token,
+## so this wrapper records every header collection and body before forwarding the call.
+class RecordingTransport extends RefCounted uses HttpTransport:
+
+	var _inner: FakeHttpClient
+	var _headers: Array[PackedStringArray] = []
+	var _bodies: Array[PackedByteArray] = []
+
+	func _init(inner: FakeHttpClient) -> void:
+		_inner = inner
+
+	## Returns whether any recorded header or body contains [param secret].
+	func contains_secret(secret: String) -> bool:
+		for request_headers: PackedStringArray in _headers:
+			for header: String in request_headers:
+				if header.contains(secret):
+					return true
+		for request_body: PackedByteArray in _bodies:
+			if request_body.get_string_from_utf8().contains(secret):
+				return true
+		return false
+
+	async func send(
+			method: String,
+			url: String,
+			headers: PackedStringArray,
+			body: PackedByteArray,
+			timeout_seconds: float) -> HttpOutcome:
+		_headers.append(headers)
+		_bodies.append(body)
+		return await _inner.send(method, url, headers, body, timeout_seconds)
+
 ## A scripted [AuthBackend]: no native class, no platform, no waiting.
 ##
 ## Nested rather than a support file because only one head type may live in a `.fs` file
@@ -1066,6 +1273,12 @@ class FakeAuthBackend extends RefCounted uses AuthBackend:
 
 	var sign_out_count: int = 0
 	var clear_count: int = 0
+	var store_count: int = 0
+	var last_store_origin: String = ""
+	var last_restore_origin: String = ""
+	var last_stored_session: AuthSession = AuthSession.new()
+	var stored_session_present: bool = false
+	var next_store_result: CompletionResult = CompletionResult.Success
 
 	## When true, sign-in and restore park until [method release] is called.
 	##
@@ -1112,19 +1325,29 @@ class FakeAuthBackend extends RefCounted uses AuthBackend:
 			await _released
 		return CompletionResult.Success
 
-	async func store_session(_session: AuthSession, _origin: String) -> CompletionResult:
-		return CompletionResult.Success
+	async func store_session(session: AuthSession, origin: String) -> CompletionResult:
+		store_count += 1
+		last_store_origin = origin
+		last_stored_session = session.duplicate_session()
+		match next_store_result:
+			CompletionResult.Success:
+				stored_session_present = true
+			CompletionResult.Failure(_error):
+				pass
+		return next_store_result
 
-	async func restore_session(_origin: String) -> SessionResult:
+	async func restore_session(origin: String) -> SessionResult:
+		last_restore_origin = origin
 		if suspends:
 			await _released
 		return restore_result
 
 	func has_stored_session() -> bool:
-		return false
+		return stored_session_present
 
 	async func clear_stored_session() -> CompletionResult:
 		clear_count += 1
+		stored_session_present = false
 		return CompletionResult.Success
 
 	func backend_name() -> String:
