@@ -143,6 +143,13 @@ static func from_bytes(bytes: PackedByteArray) -> StoredSessionOutcome:
 	for text_key: String in ["origin", "access_token", "refresh_token", "provider"]:
 		if not _carries(payload, text_key, TYPE_STRING):
 			return StoredSessionOutcome.Malformed("the record's %s is missing or not a string" % text_key)
+		# A control character cannot occur unescaped in valid JSON, and a permissive parser
+		# that accepts one anyway would let a CR/LF through into a token that
+		# [BackendClient] concatenates into the `Authorization` header — where it stops
+		# being part of the token and starts being another header.
+		if _has_a_control_character(_text_of(payload, text_key)):
+			return StoredSessionOutcome.Malformed(
+					"the record's %s contains a control character" % text_key)
 	for dictionary_key: String in ["raw", "extras"]:
 		if not _carries(payload, dictionary_key, TYPE_DICTIONARY):
 			return StoredSessionOutcome.Malformed("the record's %s is missing or not an object" % dictionary_key)
@@ -191,6 +198,17 @@ static func _name_of(value: Provider) -> String:
 		Provider.EMAIL_PASSWORD:
 			return "email_password"
 	return ""
+
+## Returns whether [param text] holds a C0 control character or DEL.
+##
+## None of them are legal unescaped in a JSON string, and none of them belong in an origin,
+## a token or a provider name.
+static func _has_a_control_character(text: String) -> bool:
+	for index: int in text.length():
+		var code_point: int = text.unicode_at(index)
+		if code_point < 0x20 or code_point == 0x7F:
+			return true
+	return false
 
 ## Returns whether [param key] is present and of [param expected_type].
 static func _carries(payload: Dictionary, key: String, expected_type: int) -> bool:

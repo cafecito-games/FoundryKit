@@ -223,6 +223,24 @@ func test_an_empty_refresh_token_still_parses() -> void:
 	var parsed: StoredSession = _parsed(StoredSession.from_bytes(record.to_bytes()))
 	Expect.that(parsed.refresh_token).to_equal("")
 
+## A token carrying CR/LF concatenated into an `Authorization` header stops being part of
+## the token and starts being another header. No control character is legal unescaped in
+## JSON, so a record carrying one is defective however it was produced.
+func test_a_field_with_a_control_character_is_malformed() -> void:
+	for key: String in ["origin", "access_token", "refresh_token", "provider"]:
+		var payload: Dictionary = {
+			"schema_version": StoredSession.SCHEMA_VERSION,
+			"origin": _ORIGIN,
+			"access_token": "a",
+			"refresh_token": "r",
+			"provider": "google",
+			"raw": {},
+			"extras": {},
+		}
+		payload[key] = "value\r\nX-Injected: 1"
+		var text: String = JSON.stringify(payload).replace("\\r\\n", "\r\n")
+		Expect.that(_outcome_name(StoredSession.from_bytes(text.to_utf8_buffer()))).to_equal("malformed")
+
 ## A field of the wrong type is a defective record. Defaulting it away would return a
 ## session that has quietly lost its refresh token or the backend's own payload.
 func test_a_field_of_the_wrong_type_is_malformed() -> void:
