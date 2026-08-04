@@ -102,6 +102,18 @@ func test_a_nested_raw_dictionary_survives_a_round_trip() -> void:
 	var id_values: Array = ids
 	Expect.that(id_values.size()).to_equal(3)
 
+## Serializing at the default precision rounds a double to a few digits, so a backend
+## value would come back changed after a restart.
+func test_a_high_precision_number_survives_a_round_trip() -> void:
+	var raw: Dictionary[String, Variant] = {"ratio": 0.1234567890123456}
+	var extras: Dictionary[String, Variant] = {}
+	var record: StoredSession = StoredSession.new(_ORIGIN, "a", "r", Provider.GOOGLE, raw, extras)
+	var parsed: StoredSession = _parsed(StoredSession.from_bytes(record.to_bytes()))
+	var ratio: Variant = parsed.raw["ratio"]
+	Expect.that(ratio is float).to_be_true()
+	var value: float = ratio
+	Expect.that(value == 0.1234567890123456).to_be_true()
+
 func test_non_ascii_extras_survive_a_round_trip() -> void:
 	var parsed: StoredSession = _round_tripped()
 	Expect.that(str(parsed.extras["tenant"])).to_equal("acmé")

@@ -100,7 +100,9 @@ func to_bytes() -> PackedByteArray:
 		"raw": raw,
 		"extras": extras,
 	}
-	return JSON.stringify(payload).to_utf8_buffer()
+	# `full_precision` is off by default, which rounds a double to a handful of digits on
+	# the way out — so a backend value in `raw` would come back changed after a restart.
+	return JSON.stringify(payload, "", true, true).to_utf8_buffer()
 
 ## Reads bytes written by [method to_bytes], refusing anything it cannot fully account for.
 ##
